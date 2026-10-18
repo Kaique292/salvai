@@ -60,3 +60,14 @@ def test_main_selftest_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "pyi_splash", None)
     app.main()
     assert ran == [str(tmp_path)]
+
+
+def test_main_relaunches_cleanly_over_stale_bundle(launch, monkeypatch):
+    started = []
+    monkeypatch.setattr(app, "stale_bundle", lambda: True)
+    monkeypatch.setattr(app, "pyi_splash", None)
+    monkeypatch.setattr(app.sys, "argv", ["Salvai.exe", "--debug"])
+    monkeypatch.setattr(app.subprocess, "Popen", lambda args, **k: started.append((args, k["env"])))
+    app.main()
+    assert started[0][0] == [app.sys.executable, "--debug"]
+    assert started[0][1]["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and launch.windows == []

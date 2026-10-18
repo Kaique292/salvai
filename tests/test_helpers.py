@@ -1025,3 +1025,23 @@ def test_selftest_writes_report(monkeypatch, tmp_path, fake_engine):
     FakeYDL.script = {"jNQXAC9IVRw": {"download": lambda ydl, url: (_ for _ in ()).throw(RuntimeError("offline"))}}
     app.selftest(str(tmp_path))
     assert "MP4 FAIL offline" in (tmp_path / "selftest.txt").read_text()
+
+
+def test_stale_bundle_detects_relaunch_over_old_extraction(monkeypatch, tmp_path):
+    exe = tmp_path / "Salvai.exe"
+    exe.write_bytes(b"x")
+    bundle = tmp_path / "_MEI1"
+    bundle.mkdir()
+    assert app.stale_bundle() is False
+    monkeypatch.setattr(app.sys, "frozen", True, raising=False)
+    assert app.stale_bundle() is False
+    monkeypatch.setattr(app.sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setattr(app.sys, "executable", str(exe))
+    created = bundle.stat()
+    born = getattr(created, "st_birthtime", created.st_ctime)
+    os.utime(exe, (born, born))
+    assert app.stale_bundle() is False
+    os.utime(exe, (born + 60, born + 60))
+    assert app.stale_bundle() is True
+    monkeypatch.setattr(app.sys, "executable", str(tmp_path / "sumiu.exe"))
+    assert app.stale_bundle() is False

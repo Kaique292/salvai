@@ -108,7 +108,8 @@ def open_bridge() -> dict:
     exe = find_app()
     if not exe:
         raise ToolError("O Salvaí não está aberto e não encontrei o Salvai.exe. Abra o app e tente de novo.")
-    subprocess.Popen([exe], close_fds=True, creationflags=DETACHED_PROCESS)
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+    subprocess.Popen([exe], close_fds=True, creationflags=DETACHED_PROCESS, env=env)
     deadline = time.time() + 60
     while time.time() < deadline:
         time.sleep(1)

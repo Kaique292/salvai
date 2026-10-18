@@ -553,12 +553,14 @@ def test_update_app_paths(api, monkeypatch):
 
 
 def test_restart_skip_and_release(api, monkeypatch, instant_timer):
-    launched = []
-    monkeypatch.setattr(app.subprocess, "Popen", lambda args, **k: launched.append(args))
+    launched, envs = [], []
+    monkeypatch.setattr(app.subprocess, "Popen", lambda args, **k: (launched.append(args), envs.append(k["env"])))
     api.restart_app()
     monkeypatch.setattr(app.sys, "frozen", True, raising=False)
     api.restart_app()
     assert launched[0][-1].endswith("app.py") and launched[1] == [app.sys.executable]
+    assert all(env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" for env in envs)
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in app.os.environ
     assert wait_until(lambda: api._window.calls.count("destroy") == 2)
     api.skip_update("engine", "2027.1.1")
     assert app.load_config()["skip_engine"] == "2027.1.1"

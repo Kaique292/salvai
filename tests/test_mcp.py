@@ -94,6 +94,7 @@ def test_open_bridge_starts_app(monkeypatch, tmp_path, fake_app):
 
     def popen(args, **kwargs):
         launched.append(args)
+        assert kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
         (tmp_path / "ainda-nao.json").write_text(json.dumps(real))
 
     monkeypatch.setattr(salvai_mcp.subprocess, "Popen", popen)
