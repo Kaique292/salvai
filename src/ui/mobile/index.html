@@ -67,6 +67,28 @@
     <section class="list" id="downloads"></section>
     <section class="list" id="files" hidden></section>
 
+    <div class="sheet" id="sheet" hidden>
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <strong id="sheet-title"></strong>
+        <p id="sheet-desc"></p>
+        <div class="sheet-actions" id="sheet-actions"></div>
+      </div>
+    </div>
+
+    <div class="player" id="player" hidden role="dialog" aria-modal="true" aria-labelledby="player-title">
+      <div class="player-top">
+        <strong id="player-title"></strong>
+        <button type="button" id="player-close" aria-label="Fechar">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <video id="player-video" controls playsinline preload="metadata"></video>
+      <p class="player-error" id="player-error"></p>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+
     <p class="ios-tip" id="ios-tip">
       No iPhone, o arquivo vai para o app <b>Arquivos → Downloads</b>. Para colocar na galeria, abra o vídeo e toque em
       <b>Compartilhar → Salvar vídeo</b>.

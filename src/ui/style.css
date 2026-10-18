@@ -2167,6 +2167,16 @@ kbd {
   text-overflow: ellipsis;
   user-select: text;
 }
+.wa-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #25d366;
+}
+.wa-btn svg {
+  width: 15px;
+  height: 15px;
+}
 .phone-others {
   margin-top: 8px;
   font-size: 12px;

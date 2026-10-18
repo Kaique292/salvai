@@ -171,6 +171,7 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "SESSIONS_PATH", data / "sessions.dat")
     monkeypatch.setattr(app, "BRIDGE_PATH", data / "bridge.json")
     monkeypatch.setattr(app, "ENGINE_DIR", data / "engine")
+    monkeypatch.setattr(app, "SAVED_PATH", data / "saved.json")
     monkeypatch.setattr(app, "MCP_DIR", data / "mcp")
     monkeypatch.setattr(app, "MCP_PATH", data / "mcp" / "salvai-mcp.exe")
     monkeypatch.setattr(app, "MCP_VERSION_PATH", data / "mcp" / "version.txt")

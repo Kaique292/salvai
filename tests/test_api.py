@@ -757,26 +757,114 @@ def test_status_and_report(api, tmp_path):
     assert api._report(api._items["a"])["file"] == "a.mp4"
 
 
-def test_phone_files_cache_and_scan(api, monkeypatch):
+def test_phone_files_only_lists_what_salvai_saved(api, monkeypatch, tmp_path):
     base = Path(api._out_dir)
-    (base / "a" / "b" / "c" / "d").mkdir(parents=True)
+    (base / "Projeto").mkdir()
+    (base / "Projeto" / "foto-pessoal.jpg").write_bytes(b"1")
+    (base / "a").mkdir()
     (base / "musica.mp3").write_bytes(b"1")
-    (base / "a" / "video.mp4").write_bytes(b"1")
-    (base / "a" / "b" / "c" / "d" / "fundo.mp4").write_bytes(b"1")
+    (base / "a" / "video.mp4").write_bytes(b"1" * 2_000_000)
     (base / "doc.pdf").write_bytes(b"1")
-    files = api._phone_files()
-    names = {f["name"] for f in files}
-    assert names == {"musica.mp3", "video.mp4"}
-    assert next(f for f in files if f["name"] == "musica.mp3")["kind"] == "audio"
-    (base / "novo.mp4").write_bytes(b"1")
-    assert api._phone_files() is files
-    real_stat = Path.stat
-    monkeypatch.setattr(
-        Path,
-        "stat",
-        lambda self, **k: (_ for _ in ()).throw(OSError()) if self.name == "novo.mp4" else real_stat(self, **k),
-    )
-    assert "novo.mp4" not in {f["name"] for f in api._scan_media()}
+    outside = tmp_path / "outra-pasta" / "antigo.mp4"
+    outside.parent.mkdir()
+    outside.write_bytes(b"1")
+    assert api._phone_files() == []
+    for path in (outside, base / "doc.pdf", base / "a" / "video.mp4", base / "musica.mp3", base / "sumiu.mp4"):
+        api._remember(str(path))
+    files = api._scan_media()
+    assert [f["name"] for f in files] == ["musica.mp3", "video.mp4", "antigo.mp4"]
+    assert [f["folder"] for f in files] == ["", "a", "outra-pasta"]
+    assert files[0]["kind"] == "audio" and files[1]["size_mb"] == 1.9
+    assert files[0]["id"] == app.file_key(base / "musica.mp3")
+    cached = api._phone_files()
+    assert api._phone_files() is cached
+    monkeypatch.setattr(app, "SAVED_LIMIT", 2)
+    api._remember(str(base / "a" / "video.mp4"))
+    assert api._saved == [str((base / "a" / "video.mp4").resolve()), str((base / "sumiu.mp4").resolve())]
+    assert app.load_saved() == api._saved
+
+
+def test_phone_files_stops_at_80(api):
+    base = Path(api._out_dir)
+    for n in range(82):
+        (base / f"{n}.mp3").write_bytes(b"1")
+        api._remember(str(base / f"{n}.mp3"))
+    assert len(api._scan_media()) == 80
+
+
+def test_load_saved_handles_bad_files(isolated):
+    assert app.load_saved() == []
+    app.SAVED_PATH.write_text("{ quebrado", encoding="utf-8")
+    assert app.load_saved() == []
+    app.SAVED_PATH.write_text('{"a": 1}', encoding="utf-8")
+    assert app.load_saved() == []
+    app.SAVED_PATH.write_text('["C:/a.mp4", 3, null]', encoding="utf-8")
+    assert app.load_saved() == ["C:/a.mp4"]
+
+
+def test_forget_clear_and_trash(api, monkeypatch):
+    base = Path(api._out_dir)
+    for name in ("a.mp4", "b.mp3", "c.mp4"):
+        (base / name).write_bytes(b"1")
+        api._remember(str(base / name))
+    api._phone_files()
+    assert api._forget(app.file_key(base / "a.mp4")) is True and api._files_cache is None
+    assert api._forget("nao-existe") is False
+    trashed = []
+    monkeypatch.setattr(app, "send_to_trash", lambda path: (trashed.append(path), path.unlink()))
+    assert api._trash(app.file_key(base / "b.mp3")) == "b.mp3"
+    assert trashed == [(base / "b.mp3").resolve()] and not (base / "b.mp3").exists()
+    assert [f["name"] for f in api._scan_media()] == ["c.mp4"]
+    with pytest.raises(ValueError, match="não encontrado"):
+        api._trash(app.file_key(base / "b.mp3"))
+    (base / "c.mp4").unlink()
+    with pytest.raises(ValueError):
+        api._trash(app.file_key(base / "c.mp4"))
+    api._clear_saved()
+    assert api._saved == [] and app.load_saved() == []
+
+
+def test_saved_file_ignores_other_extensions(api):
+    base = Path(api._out_dir)
+    (base / "x.pdf").write_bytes(b"1")
+    api._remember(str(base / "x.pdf"))
+    assert api._saved_file(app.file_key(base / "x.pdf")) is None
+
+
+def test_send_to_trash_reports_failures(monkeypatch, tmp_path):
+    target = tmp_path / "video.mp4"
+    target.write_bytes(b"1")
+    calls = []
+
+    def operation(code, aborted=False, delete=True):
+        def run(ref):
+            op = ref._obj
+            calls.append((op.wFunc, op.pFrom, op.fFlags))
+            op.fAnyOperationsAborted = aborted
+            if delete and target.exists():
+                target.unlink()
+            return code
+
+        return run
+
+    def use(fn):
+        monkeypatch.setattr(
+            app.ctypes, "windll", types.SimpleNamespace(shell32=types.SimpleNamespace(SHFileOperationW=fn))
+        )
+
+    use(operation(0))
+    app.send_to_trash(target)
+    assert calls[0] == (3, str(target), 0x0454) and not target.exists()
+    target.write_bytes(b"1")
+    use(operation(2, delete=False))
+    with pytest.raises(OSError, match="Lixeira"):
+        app.send_to_trash(target)
+    use(operation(0, aborted=True, delete=False))
+    with pytest.raises(OSError):
+        app.send_to_trash(target)
+    use(operation(0, delete=False))
+    with pytest.raises(OSError):
+        app.send_to_trash(target)
 
 
 def test_phone_controls_and_firewall(api, monkeypatch):
@@ -842,8 +930,10 @@ def test_move_file(api):
     (base / "Org").mkdir()
     (base / "Org" / "a.mp3").write_bytes(b"0")
     api._items = {"x": {"filepath": str(base / "a.mp3")}, "y": {"filepath": None}}
+    api._remember(str(base / "a.mp3"))
     assert api._move("a.mp3", "Org") == {"moved_to": "Org\\a (2).mp3"}
     assert api._items["x"]["filepath"].endswith("a (2).mp3")
+    assert api._saved == [str((base / "Org" / "a (2).mp3").resolve())]
     (base / "c.mp3").write_bytes(b"1")
     (base / "Org" / "c.mp3").write_bytes(b"1")
     (base / "Org" / "c (2).mp3").write_bytes(b"1")
@@ -905,3 +995,40 @@ def test_setup_mcp_skips_when_not_installed_or_offline(api, monkeypatch):
     api._cfg["app_path"] = app.sys.executable
     api._setup_mcp()
     assert called == [] and "claude_registered" not in api._cfg
+
+
+def test_whatsapp_message_mentions_the_network():
+    url = "http://192.168.0.2:47800/?k=abc"
+    wifi = app.whatsapp_message(url, {"kind": "wifi", "name": "Casa 5G"})
+    assert url in wifi and "Wi-Fi *Casa 5G*" in wifi and wifi.startswith("📲 *Salvaí no celular*")
+    assert "mesmo roteador" in app.whatsapp_message(url, {"kind": "cabo"})
+    assert "mesmo Wi-Fi do computador" in app.whatsapp_message(url, {"kind": "wifi"})
+    assert "mesmo Wi-Fi do computador" in app.whatsapp_message(url, {})
+
+
+def test_whatsapp_installed(monkeypatch):
+    closed = []
+    fake = types.SimpleNamespace(
+        HKEY_CLASSES_ROOT="HKCR", OpenKey=lambda root, name: (root, name), CloseKey=closed.append
+    )
+    monkeypatch.setattr(app, "winreg", fake)
+    assert app.whatsapp_installed() is True and closed == [("HKCR", "whatsapp")]
+    fake.OpenKey = lambda root, name: (_ for _ in ()).throw(FileNotFoundError())
+    assert app.whatsapp_installed() is False
+
+
+def test_share_whatsapp(api, monkeypatch):
+    opened = []
+    monkeypatch.setattr(app.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(api._phone, "status", lambda: {"on": False})
+    assert api.share_whatsapp() == {"ok": False} and opened == []
+    monkeypatch.setattr(api._phone, "status", lambda: {"on": True, "url": "http://10.0.0.2:47800/?k=x"})
+    api._phone.network = {"kind": "wifi", "name": "Casa & Cia"}
+    monkeypatch.setattr(app, "whatsapp_installed", lambda: True)
+    assert api.share_whatsapp() == {"ok": True, "app": "desktop"}
+    assert opened[-1].startswith("whatsapp://send?text=") and "Casa%20%26%20Cia" in opened[-1]
+    monkeypatch.setattr(app, "whatsapp_installed", lambda: False)
+    api._phone.network = None
+    assert api.share_whatsapp() == {"ok": True, "app": "web"}
+    assert opened[-1].startswith("https://web.whatsapp.com/send?text=")
+    assert app.urllib.parse.quote("http://10.0.0.2:47800/?k=x") in opened[-1]
