@@ -124,11 +124,16 @@ No app, clique no ícone de pessoa → **Contas** → **Entrar**. Abre a página
 2. Aponte a câmera do celular para o **QR code**.
 3. Pronto: cole links para baixar no PC, acompanhe o progresso e toque em **Salvar** para levar o arquivo para o celular.
 
+Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado do link: o Salvaí abre o WhatsApp (o app do PC ou o WhatsApp Web) com uma mensagem pronta, com o link e o nome do Wi-Fi. É só escolher o contato.
+
 - Não precisa instalar nada no celular — abre no navegador (Android e iPhone).
+- **Assistir sem baixar:** em **Arquivos no PC**, toque no ▶ para ver o vídeo ou ouvir a música direto do computador, podendo avançar e voltar.
+- A aba **Arquivos no PC** mostra **só o que o Salvaí baixou** — nada das outras pastas e arquivos do seu computador.
+- No **⋯** de cada arquivo dá para **tirar da lista** (o arquivo continua no PC) ou **apagar do computador**: depois de confirmar, ele vai para a **Lixeira** do Windows e pode ser recuperado. **Limpar lista** esvazia a lista sem apagar nada.
 - Se o download para o celular for interrompido (o Wi-Fi caiu, a tela bloqueou…), ele **continua de onde parou**.
 - No iPhone, os arquivos vão para **Arquivos → Downloads**; para colocar na galeria, abra o vídeo e toque em **Compartilhar → Salvar vídeo**.
 - Funciona com cabo ou Wi-Fi no computador, em redes IPv4 e IPv6.
-- **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga.
+- **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga. O celular só enxerga e só apaga arquivos que o próprio Salvaí baixou.
 
 <details>
 <summary><b>O celular não conecta?</b></summary>
