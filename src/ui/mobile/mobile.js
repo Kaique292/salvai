@@ -41,8 +41,12 @@ document
   .forEach((b) => b.addEventListener("click", () => setFormat(b.dataset.value)));
 setFormat("MP4");
 
-function setOnline(ok, computer) {
+function setOnline(ok, computer, revoked) {
   $("#offline").classList.toggle("show", !ok);
+  if (revoked) {
+    $("#offline strong").textContent = "Desconectado pelo computador";
+    $("#offline span").textContent = revoked;
+  }
   $("#link-state").classList.toggle("ok", ok);
   $("#computer").textContent = ok ? `Conectado ao ${computer}` : "Desconectado";
 }
@@ -50,7 +54,11 @@ function setOnline(ok, computer) {
 async function api(path, options) {
   const res = await fetch(path, { cache: "no-cache", ...options });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Algo deu errado");
+  if (!res.ok) {
+    const error = new Error(data.error || "Algo deu errado");
+    error.revoked = !!data.revoked;
+    throw error;
+  }
   return data;
 }
 
@@ -277,8 +285,8 @@ async function refresh() {
     renderDownloads(state.downloads);
     active = state.downloads.some((d) => !["done", "error"].includes(d.status));
     if (tab === "files") renderFiles((await api("/api/files")).files);
-  } catch {
-    setOnline(false);
+  } catch (err) {
+    setOnline(false, null, err.revoked && err.message);
   } finally {
     busy = false;
     schedule(active);

@@ -1110,6 +1110,79 @@ const phone = (() => {
   let timer = null;
   let lastFocus = null;
   let state = { on: false };
+  let confirming = null;
+  let confirmTimer = null;
+
+  const two = (n) => String(n).padStart(2, "0");
+  function when(seconds) {
+    const d = new Date(seconds * 1000);
+    const ago = Math.max(0, Date.now() / 1000 - seconds);
+    const time = `${two(d.getHours())}:${two(d.getMinutes())}`;
+    if (ago < 60) return "agora há pouco";
+    if (ago < 3600) return `há ${Math.floor(ago / 60)} min`;
+    if (new Date().toDateString() === d.toDateString()) return `hoje às ${time}`;
+    return `${two(d.getDate())}/${two(d.getMonth() + 1)} às ${time}`;
+  }
+
+  function deviceRow(d, live) {
+    const row = document.createElement("div");
+    row.className = "dev-row";
+    const status = live
+      ? `${d.online ? "Conectado agora" : `Visto ${when(d.seen)}`} · desde ${when(d.since)}`
+      : `Última vez ${when(d.last)}`;
+    row.innerHTML = `<span class="dev-dot${live && d.online ? " on" : ""}"></span><div class="dev-meta"><strong>${escapeHtml(d.name)}</strong><small>${escapeHtml(d.ip)} · ${escapeHtml(status)}</small></div>`;
+    if (live) {
+      const btn = document.createElement("button");
+      btn.className = `ghost dev-revoke${confirming === d.id ? " confirm" : ""}`;
+      btn.textContent = confirming === d.id ? "Confirmar" : "Desconectar";
+      btn.addEventListener("click", () => askRevoke(d.id));
+      row.appendChild(btn);
+    } else if (d.revoked) {
+      row.insertAdjacentHTML("beforeend", '<span class="dev-tag revoked">Desconectado por você</span>');
+    }
+    return row;
+  }
+
+  function renderDevices() {
+    const live = state.devices;
+    const history = state.history || [];
+    $("#phone-count").textContent = live.length ? String(live.length) : "";
+    const liveEl = $("#dev-live");
+    liveEl.replaceChildren(...live.map((d) => deviceRow(d, true)));
+    if (!live.length) liveEl.innerHTML = '<div class="dev-empty">Nenhum aparelho conectado agora</div>';
+    const historyEl = $("#dev-history");
+    historyEl.replaceChildren(...history.map((d) => deviceRow(d, false)));
+    if (!history.length) historyEl.innerHTML = '<div class="dev-empty">Nenhum aparelho no histórico</div>';
+    $("#dev-clear-history").hidden = !history.length;
+    const all = $("#dev-revoke-all");
+    all.hidden = !live.length;
+    all.classList.toggle("confirm", confirming === "*");
+    all.textContent = confirming === "*" ? "Confirmar: desconectar todos" : "Desconectar todos";
+  }
+
+  async function askRevoke(id) {
+    clearTimeout(confirmTimer);
+    if (confirming !== id) {
+      confirming = id;
+      confirmTimer = setTimeout(() => {
+        confirming = null;
+        render();
+      }, 4000);
+      return render();
+    }
+    confirming = null;
+    state = id === "*" ? await api().phone_revoke_all() : await api().phone_revoke(id);
+    render();
+  }
+
+  function showTab(name) {
+    document.querySelectorAll(".phone-tabs button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.ptab === name);
+      b.setAttribute("aria-selected", String(b.dataset.ptab === name));
+    });
+    $("#phone-pane-connect").hidden = name !== "connect";
+    $("#phone-pane-devices").hidden = name !== "devices";
+  }
 
   function render() {
     sw.classList.toggle("on", state.on);
@@ -1130,9 +1203,11 @@ const phone = (() => {
     if (net.kind === "cabo") text = "O computador está no cabo: conecte o celular ao Wi-Fi do mesmo roteador";
     $("#net-text").textContent = text;
     $("#phone-warn").classList.toggle("show", !!net.public);
-    $("#phone-devices").innerHTML = state.devices.length
-      ? state.devices.map((d) => `<span class="device">● ${escapeHtml(d)} conectado</span>`).join("")
+    const online = state.devices.filter((d) => d.online);
+    $("#phone-devices").innerHTML = online.length
+      ? online.map((d) => `<span class="device">● ${escapeHtml(d.name)} conectado</span>`).join("")
       : '<span class="waiting">Nenhum celular conectado ainda</span>';
+    renderDevices();
     const others = state.others || [];
     $("#phone-others").classList.toggle("has", others.length > 0);
     $("#phone-others-list").innerHTML = others.map((u) => `<li>${escapeHtml(u)}</li>`).join("");
@@ -1178,6 +1253,14 @@ const phone = (() => {
     if (!result.ok) return;
     btn.lastChild.textContent = result.app === "desktop" ? " Abrindo…" : " Abrindo no navegador…";
     setTimeout(() => (btn.lastChild.textContent = " WhatsApp"), 2500);
+  });
+  document
+    .querySelectorAll(".phone-tabs button")
+    .forEach((b) => b.addEventListener("click", () => showTab(b.dataset.ptab)));
+  $("#dev-revoke-all").addEventListener("click", () => askRevoke("*"));
+  $("#dev-clear-history").addEventListener("click", async () => {
+    state = await api().phone_clear_history();
+    render();
   });
   $("#phone-firewall").addEventListener("click", () => api().phone_allow_firewall());
   $("#phone-settings").addEventListener("click", () => api().open_network_settings());

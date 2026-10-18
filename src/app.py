@@ -664,6 +664,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 MAX_BODY = 64 * 1024
 PHONE_IDLE_LIMIT = 30 * 60
+PHONE_HISTORY_LIMIT = 20
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -956,12 +957,65 @@ class DualStackServer(ExclusiveHTTPServer):
 
 class PhoneServer:
     def __init__(self, api: "Api"):
-        self.api, self.server, self.token, self.devices = api, None, "", {}
+        self.api, self.server, self.token = api, None, ""
+        self.sessions: dict[str, dict] = {}
+        self.revoked: set[str] = set()
+        self.session_lock = threading.Lock()
         self.network, self.network_at, self.network_lock = None, 0.0, threading.Lock()
         self.failures: dict[str, list[float]] = {}
         self.qr: tuple[str, str] | None = None
         self.adds: deque = deque()
         self.last_activity = 0.0
+
+    def session_for(self, sid: str) -> dict | None:
+        return self.sessions.get(sid) if sid else None
+
+    def open_session(self, ip: str, user_agent: str) -> str:
+        sid = secrets.token_urlsafe(24)
+        now = time.time()
+        session = {"id": secrets.token_hex(6), "name": device_name(user_agent), "ip": ip, "since": now, "seen": now}
+        with self.session_lock:
+            self.sessions[sid] = session
+        self.remember(session)
+        return sid
+
+    def remember(self, session: dict, **changes):
+        cfg = self.api._cfg
+        history = [h for h in cfg.get("phone_history", []) if h["id"] != session["id"]]
+        entry = {
+            "id": session["id"],
+            "name": session["name"],
+            "ip": session["ip"],
+            "since": session["since"],
+            "last": session["seen"],
+        }
+        cfg["phone_history"] = [{**entry, **changes}, *history][:PHONE_HISTORY_LIMIT]
+        save_config(cfg)
+
+    def rotate_token(self):
+        self.token = secrets.token_urlsafe(16)
+        self.qr = None
+
+    def revoke(self, device_id: str) -> bool:
+        with self.session_lock:
+            found = [(sid, s) for sid, s in self.sessions.items() if s["id"] == device_id]
+            for sid, _ in found:
+                del self.sessions[sid]
+                self.revoked.add(sid)
+        for _, session in found:
+            self.remember(session, revoked=True)
+        if found:
+            self.rotate_token()
+        return bool(found)
+
+    def revoke_all(self):
+        with self.session_lock:
+            found = list(self.sessions.items())
+            self.sessions.clear()
+            self.revoked.update(sid for sid, _ in found)
+        for _, session in found:
+            self.remember(session, revoked=True)
+        self.rotate_token()
 
     def blocked(self, ip: str) -> bool:
         now = time.time()
@@ -1015,8 +1069,8 @@ class PhoneServer:
         if self.server:
             return
         phone = self
-        self.token = secrets.token_urlsafe(16)
-        self.devices, self.failures, self.adds = {}, {}, deque()
+        self.rotate_token()
+        self.sessions, self.revoked, self.failures, self.adds = {}, set(), {}, deque()
         self.last_activity = time.time()
 
         class Handler(BaseHTTPRequestHandler):
@@ -1048,10 +1102,18 @@ class PhoneServer:
                 if self.command != "HEAD":
                     self.wfile.write(body)
 
-            def _allowed(self, query: dict) -> bool:
+            def _session(self, method: str, path: str, query: dict) -> dict | None:
+                self.new_session, self.revoked_session = None, False
                 cookie = re.search(r"salvai=([\w-]+)", self.headers.get("Cookie") or "")
-                given = query.get("k") or (cookie.group(1) if cookie else "")
-                return secrets.compare_digest(given, phone.token)
+                sid = cookie.group(1) if cookie else ""
+                session = phone.session_for(sid)
+                if session:
+                    return session
+                if method == "GET" and path == "/" and secrets.compare_digest(query.get("k", ""), phone.token):
+                    self.new_session = phone.open_session(self.client_address[0], self.headers.get("User-Agent"))
+                    return phone.session_for(self.new_session)
+                self.revoked_session = sid in phone.revoked
+                return None
 
             def _same_origin(self) -> bool:
                 origin = self.headers.get("Origin")
@@ -1067,13 +1129,22 @@ class PhoneServer:
                     return self._json(429, {"error": "Muitas tentativas. Espere alguns minutos."})
                 url = urllib.parse.urlparse(self.path)
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
-                if not self._allowed(query):
+                session = self._session(method, url.path, query)
+                if not session:
+                    if self.revoked_session:
+                        return self._json(
+                            403,
+                            {
+                                "error": "Este aparelho foi desconectado no computador. Peça um QR code novo.",
+                                "revoked": True,
+                            },
+                        )
                     phone.failures.setdefault(ip, []).append(time.time())
                     return self._json(403, {"error": "Abra pelo QR code que aparece no Salvaí do computador."})
                 if method == "POST" and not self._same_origin():
                     return self._json(403, {"error": "origem inválida"})
                 phone.last_activity = time.time()
-                phone.devices[ip] = {"name": device_name(self.headers.get("User-Agent")), "seen": time.time()}
+                session.update(ip=ip, seen=time.time())
                 try:
                     phone.route(self, method, url.path, query)
                 except (ConnectionError, BrokenPipeError):
@@ -1113,14 +1184,18 @@ class PhoneServer:
             server, self.server = self.server, None
             server.shutdown()
             server.server_close()
+            with self.session_lock:
+                active, self.sessions = list(self.sessions.values()), {}
+            for session in active:
+                self.remember(session)
 
     def route(self, h, method: str, path: str, query: dict):
         api = self.api
         if method == "GET" and path == "/":
             page = (BASE / "ui" / "mobile" / "index.html").read_bytes()
             h.send_response(200)
-            if query.get("k"):
-                h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            if getattr(h, "new_session", None):
+                h.send_header("Set-Cookie", f"salvai={h.new_session}; Path=/; SameSite=Strict; HttpOnly")
             h.send_header("Content-Type", "text/html; charset=utf-8")
             h.send_header("Content-Length", str(len(page)))
             h.send_header("Cache-Control", "no-store")
@@ -1172,7 +1247,21 @@ class PhoneServer:
             threading.Thread(target=self.refresh_network, daemon=True).start()
         urls = self.addresses()
         now = time.time()
-        devices = sorted({d["name"] for d in self.devices.values() if now - d["seen"] < 20})
+        with self.session_lock:
+            live = sorted(self.sessions.values(), key=lambda d: d["since"])
+        devices = [
+            {
+                "id": d["id"],
+                "name": d["name"],
+                "ip": d["ip"],
+                "since": d["since"],
+                "seen": d["seen"],
+                "online": now - d["seen"] < 20,
+            }
+            for d in live
+        ]
+        live_ids = {d["id"] for d in live}
+        history = [h for h in self.api._cfg.get("phone_history", []) if h["id"] not in live_ids]
         if not self.qr or self.qr[0] != urls[0]:
             svg = segno.make(urls[0], error="m").svg_inline(border=2, dark="#111114", light="#ffffff", omitsize=True)
             self.qr = (urls[0], svg)
@@ -1191,6 +1280,7 @@ class PhoneServer:
             },
             "port": self.server.server_address[1],
             "devices": devices,
+            "history": history,
         }
 
 
@@ -2007,6 +2097,19 @@ class Api:
     def phone_start(self) -> dict:
         self._phone.start()
         self._tray.refresh()
+        return self._phone.status()
+
+    def phone_revoke(self, device_id: str) -> dict:
+        self._phone.revoke(device_id)
+        return self._phone.status()
+
+    def phone_revoke_all(self) -> dict:
+        self._phone.revoke_all()
+        return self._phone.status()
+
+    def phone_clear_history(self) -> dict:
+        self._cfg["phone_history"] = []
+        save_config(self._cfg)
         return self._phone.status()
 
     def phone_stop(self) -> dict:
