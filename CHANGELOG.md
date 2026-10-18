@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/Kaique292/salvai/compare/v1.2.1...v1.2.2) (2026-10-18)
+
+
+### 🐛 Correções
+
+* o link do QR code continua funcionando ao abrir no Safari ([867121a](https://github.com/Kaique292/salvai/commit/867121ad571ee0508e0eb0c279ae9e2d7a75688a))
+
 ## [1.2.1](https://github.com/Kaique292/salvai/compare/v1.2.0...v1.2.1) (2026-10-18)
 
 
