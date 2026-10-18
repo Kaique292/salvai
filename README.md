@@ -10,6 +10,7 @@
   <a href="https://github.com/Kaique292/salvai/actions/workflows/ci.yml"><img alt="Cobertura de testes" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FKaique292%2Fsalvai%2Fmain%2Fdocs%2Fbadges%2Fcoverage.json"></a>
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white">
+  <a href="LICENSE"><img alt="Licença MIT" src="https://img.shields.io/badge/licen%C3%A7a-MIT-2EA043"></a>
   <a href="https://www.conventionalcommits.org/pt-br/"><img alt="Commits semânticos" src="https://img.shields.io/badge/commits-sem%C3%A2nticos-8E4EC6"></a>
   <a href="https://buymeacoffee.com/kaiqueamaral"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
 </p>
@@ -304,6 +305,10 @@ As versões e o [CHANGELOG](CHANGELOG.md) são gerados pelo [release-please](htt
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) · [FFmpeg](https://ffmpeg.org/) · [pywebview](https://pywebview.flowrl.com/) · [Deno](https://deno.com/) · [SortableJS](https://sortablejs.github.io/Sortable/) · [Model Context Protocol](https://modelcontextprotocol.io/) · [PyInstaller](https://pyinstaller.org/)
 
 O FFmpeg é distribuído junto com o app sob a licença GPL; o código-fonte está disponível em [ffmpeg.org](https://ffmpeg.org/download.html).
+
+## 📄 Licença
+
+O Salvaí é software livre sob a [licença MIT](LICENSE): você pode usar, estudar, modificar e distribuir, inclusive em outros projetos, desde que mantenha o aviso de copyright.
 
 ## ☕ Apoie o projeto
 

@@ -2,6 +2,8 @@
 name = "salvai"
 description = "Viu, gostou, salvaí. Baixe vídeos e músicas do YouTube, Instagram, TikTok, X e muito mais."
 requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
 dynamic = ["version"]
 
 [tool.ruff]
