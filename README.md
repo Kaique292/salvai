@@ -223,6 +223,15 @@ No ícone de banco de dados você vê quanto o app ocupa e o que é cada parte: 
 
 **Onde ficam os dados do app?** Em `%APPDATA%\Salvai` (configurações, contas criptografadas e componentes).
 
+## 🔒 Segurança e privacidade
+
+- **Sem telemetria:** nada sobre o seu uso sai do seu PC.
+- **Contas criptografadas** pelo Windows, e o app nunca vê sua senha.
+- **Modo celular protegido:** desligado por padrão, desliga sozinho após 30 minutos sem uso, só aceita aparelhos da sua rede com o código do QR e só entrega arquivos de mídia.
+- **Atualizações conferidas:** cada arquivo baixado (app, motor de download e Deno) é verificado pelo SHA-256 oficial antes de ser usado.
+
+Os detalhes, os limites conhecidos e como reportar uma falha estão em [SECURITY.md](SECURITY.md).
+
 ## ⚖️ Uso responsável
 
 Baixe apenas conteúdo que você tem o direito de guardar e respeite os termos de uso de cada site e os direitos dos criadores.
