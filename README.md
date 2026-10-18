@@ -140,6 +140,7 @@ Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado d
 - Se o download para o celular for interrompido (o Wi-Fi caiu, a tela bloqueou…), ele **continua de onde parou**.
 - No iPhone, os arquivos vão para **Arquivos → Downloads**; para colocar na galeria, abra o vídeo e toque em **Compartilhar → Salvar vídeo**.
 - Funciona com cabo ou Wi-Fi no computador, em redes IPv4 e IPv6.
+- **Quem está conectado:** na aba **Aparelhos**, você vê cada celular conectado e o histórico, e pode **desconectar** qualquer um — o código do QR muda para ele não conseguir voltar, e os outros continuam conectados.
 - **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga. O celular só enxerga e só apaga arquivos que o próprio Salvaí baixou.
 
 <details>
