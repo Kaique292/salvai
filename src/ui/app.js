@@ -18,6 +18,7 @@ const QUALITIES = {
 };
 const CIRC = 2 * Math.PI * 21;
 const PENDING = new Set(["setup", "queued", "fetching", "downloading", "processing", "paused"]);
+const INFO_ICON = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/></svg>';
 
 const $ = (s) => document.querySelector(s);
 const input = $("#link-input");
@@ -733,9 +734,24 @@ const storage = (() => {
     box.classList.add("show");
   }
 
+  async function checkNow() {
+    const btn = $("#st-check");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> Procurando…';
+    const result = await api().check_updates_now();
+    btn.disabled = false;
+    if (result.found) {
+      btn.textContent = "Procurar atualizações";
+      return close();
+    }
+    btn.textContent = result.offline ? "Sem conexão. Tente de novo" : "Você já está na versão mais recente";
+    setTimeout(() => (btn.textContent = "Procurar atualizações"), 3500);
+  }
+
   $("#storage-btn").addEventListener("click", open);
   modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
   clearBtn.addEventListener("click", clear);
+  $("#st-check").addEventListener("click", checkNow);
   document.addEventListener(
     "keydown",
     (e) => {
@@ -1008,12 +1024,15 @@ const notices = (() => {
       desc.textContent = `Os sites mudam o tempo todo: a versão ${current.latest} mantém os downloads funcionando (você está na ${current.current}).`;
       action.textContent = "Atualizar";
     } else {
-      title.textContent = `Salvaí ${current.latest} disponível`;
-      desc.innerHTML = `Você está na versão ${escapeHtml(current.current)}. A atualização leva menos de um minuto · <a href="#" class="notice-link">ver novidades</a>`;
-      desc.querySelector(".notice-link").addEventListener("click", (e) => {
+      title.innerHTML = `Salvaí ${escapeHtml(current.latest)} disponível <button class="notice-info" title="O que muda nesta versão" aria-label="O que muda nesta versão">${INFO_ICON}</button>`;
+      desc.innerHTML = `Você está na versão ${escapeHtml(current.current)}. A atualização leva menos de um minuto · <a href="#" class="notice-link">o que muda</a>`;
+      const notice = current;
+      const showNotes = (e) => {
         e.preventDefault();
-        api().open_release(current.url);
-      });
+        whatsNew.open(notice, () => current === notice && notice.stage !== "manual" && updateApp());
+      };
+      title.querySelector(".notice-info").addEventListener("click", showNotes);
+      desc.querySelector(".notice-link").addEventListener("click", showNotes);
       action.textContent = "Atualizar agora";
     }
   }
@@ -1092,12 +1111,84 @@ const notices = (() => {
 
   return {
     add(notice) {
+      const same = (n) => n && n.kind === notice.kind && n.latest === notice.latest;
+      if (same(current) || queue.some(same)) return;
       queue.push(notice);
       if (!current) next();
     },
   };
 })();
 window.app.updateAvailable = (notice) => notices.add(notice);
+
+const whatsNew = (() => {
+  const modal = $("#notes-modal");
+  const body = $("#notes-body");
+  let onUpdate = null;
+  let lastFocus = null;
+  let page = null;
+
+  const fmtDate = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+
+  function render(releases) {
+    if (!releases.length) {
+      body.innerHTML = '<p class="notes-empty">Nenhuma novidade registrada para essa versão.</p>';
+      return;
+    }
+    body.innerHTML = releases
+      .map((r) => {
+        const sections = r.sections.length
+          ? r.sections
+              .map(
+                (s) =>
+                  `<h5>${escapeHtml(s.title)}</h5><ul>${s.items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`,
+              )
+              .join("")
+          : "<h5>Melhorias internas</h5>";
+        return `<section class="notes-version"><h4>Versão ${escapeHtml(r.version)} <small>${escapeHtml(fmtDate(r.date))}</small></h4>${sections}</section>`;
+      })
+      .join("");
+  }
+
+  async function open(notice, update) {
+    lastFocus = document.activeElement;
+    onUpdate = update;
+    $("#notes-title").textContent = `O que muda da ${notice.current} para a ${notice.latest}`;
+    body.innerHTML = '<div class="notes-loading"><span class="spin"></span> Buscando as novidades…</div>';
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    const data = await api().release_notes();
+    page = data.url;
+    if (!data.ok) {
+      body.innerHTML = '<p class="notes-empty">Não deu para buscar as novidades agora. Veja no GitHub.</p>';
+      return;
+    }
+    render(data.releases);
+  }
+
+  function close() {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    lastFocus?.focus();
+  }
+
+  modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
+  $("#notes-github").addEventListener("click", () => page && api().open_release(page));
+  $("#notes-update").addEventListener("click", () => {
+    close();
+    onUpdate?.();
+  });
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && modal.classList.contains("open")) {
+        e.stopPropagation();
+        close();
+      }
+    },
+    true,
+  );
+  return { open };
+})();
 window.app.otaProgress = (pct) => {
   const action = $("#notice-action");
   if (action.disabled)
