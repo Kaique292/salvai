@@ -1,0 +1,13 @@
+.venv/
+node_modules/
+build/
+dist/
+__pycache__/
+*.pyc
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
