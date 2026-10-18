@@ -12,3 +12,22 @@ extend-exclude = ["packaging"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E402", "E731", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+concurrency = ["thread"]
+data_file = "build/.coverage"
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.coverage.json]
+output = "build/coverage-python.json"
