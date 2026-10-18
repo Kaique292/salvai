@@ -75,6 +75,25 @@ describe("conexão", () => {
   });
 });
 
+describe("aparelho desconectado no computador", () => {
+  test("mostra o aviso de desconexão em vez do erro de conexão", async () => {
+    await boot({
+      "/api/state": {
+        status: 403,
+        body: { error: "Este aparelho foi desconectado no computador. Peça um QR code novo.", revoked: true },
+      },
+    });
+    expect($("#offline").classList.contains("show")).toBe(true);
+    expect($("#offline strong").textContent).toBe("Desconectado pelo computador");
+    expect($("#offline span").textContent).toBe("Este aparelho foi desconectado no computador. Peça um QR code novo.");
+  });
+
+  test("outros erros mantêm o aviso padrão", async () => {
+    await boot({ "/api/state": { status: 403, body: { error: "Abra pelo QR code" } } });
+    expect($("#offline strong").textContent).toBe("Sem conexão com o computador");
+  });
+});
+
 describe("lista de downloads", () => {
   test("mostra mensagem quando não há downloads", async () => {
     await boot();

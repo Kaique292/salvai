@@ -506,13 +506,20 @@ describe("avisos de atualização", () => {
   });
 });
 
+const NOW = new Date(2026, 9, 18, 20, 0, 0).getTime() / 1000;
+
+function device(extra = {}) {
+  return { id: "d1", name: "iPhone", ip: "192.168.0.5", since: NOW - 600, seen: NOW, online: true, ...extra };
+}
+
 function phoneState(extra = {}) {
   return {
     on: true,
     url: "http://192.168.0.2:8765/?k=1",
     qr: '<svg id="qr1"></svg>',
     network: { kind: "wifi", name: "Casa", public: true },
-    devices: ["<iPhone>"],
+    devices: [device({ name: "<iPhone>" })],
+    history: [],
     others: ["http://10.0.0.2:8765/?k=1"],
     ...extra,
   };
@@ -651,11 +658,121 @@ describe("celular", () => {
   });
 
   test("phoneChanged sincroniza o estado", async () => {
-    const { api } = await setup({ phone_status: async () => phoneState({ devices: ["Galaxy"] }) });
+    const { api } = await setup({
+      phone_status: async () =>
+        phoneState({ devices: [device({ name: "Galaxy" }), device({ id: "d2", name: "Velho", online: false })] }),
+    });
     window.app.phoneChanged();
     await tick(0);
     expect(api.phone_status).toHaveBeenCalledTimes(1);
     expect($("#phone-devices .device").textContent).toBe("● Galaxy conectado");
     expect($("#phone-btn").classList.contains("on")).toBe(true);
+  });
+});
+
+describe("aparelhos conectados", () => {
+  beforeEach(() => {
+    vi.setSystemTime(NOW * 1000);
+  });
+
+  async function openDevices(state, overrides = {}) {
+    const result = await setup({ phone_status: async () => state, ...overrides });
+    click($("#phone-btn"));
+    await tick(0);
+    click($('.phone-tabs button[data-ptab="devices"]'));
+    return result;
+  }
+
+  test("troca entre as abas Conectar e Aparelhos", async () => {
+    await openDevices(phoneState());
+    expect($("#phone-pane-devices").hidden).toBe(false);
+    expect($("#phone-pane-connect").hidden).toBe(true);
+    expect($('.phone-tabs button[data-ptab="devices"]').getAttribute("aria-selected")).toBe("true");
+    expect($("#phone-count").textContent).toBe("1");
+    click($('.phone-tabs button[data-ptab="connect"]'));
+    expect($("#phone-pane-connect").hidden).toBe(false);
+    expect($("#phone-pane-devices").hidden).toBe(true);
+  });
+
+  test("lista conectados e histórico com horários legíveis", async () => {
+    const yesterday = new Date(2026, 9, 17, 9, 5).getTime() / 1000;
+    const state = phoneState({
+      devices: [
+        device({ name: "<iPhone>", ip: "192.168.0.5", seen: NOW - 5, since: NOW - 30 }),
+        device({ id: "d2", name: "Android", ip: "192.168.0.6", online: false, seen: NOW - 300, since: NOW - 7200 }),
+      ],
+      history: [
+        { id: "h1", name: "iPad", ip: "192.168.0.7", since: yesterday, last: yesterday, revoked: true },
+        { id: "h2", name: "Windows", ip: "192.168.0.8", since: NOW - 4000, last: NOW - 3900 },
+      ],
+    });
+    await openDevices(state);
+    const live = [...document.querySelectorAll("#dev-live .dev-row")];
+    expect(live).toHaveLength(2);
+    expect(live[0].querySelector("strong").textContent).toBe("<iPhone>");
+    expect(live[0].querySelector("small").textContent).toBe("192.168.0.5 · Conectado agora · desde agora há pouco");
+    expect(live[0].querySelector(".dev-dot").classList.contains("on")).toBe(true);
+    expect(live[1].querySelector("small").textContent).toBe("192.168.0.6 · Visto há 5 min · desde hoje às 18:00");
+    expect(live[1].querySelector(".dev-dot").classList.contains("on")).toBe(false);
+    const history = [...document.querySelectorAll("#dev-history .dev-row")];
+    expect(history[0].querySelector("small").textContent).toBe("192.168.0.7 · Última vez 17/10 às 09:05");
+    expect(history[0].querySelector(".dev-tag.revoked").textContent).toBe("Desconectado por você");
+    expect(history[1].querySelector(".dev-tag")).toBeNull();
+    expect(history[1].querySelector("button")).toBeNull();
+    expect($("#dev-clear-history").hidden).toBe(false);
+    expect($("#dev-revoke-all").hidden).toBe(false);
+    expect($("#phone-count").textContent).toBe("2");
+  });
+
+  test("mostra vazios quando ninguém conectou", async () => {
+    await openDevices(phoneState({ devices: [], history: undefined }));
+    expect($("#dev-live .dev-empty").textContent).toBe("Nenhum aparelho conectado agora");
+    expect($("#dev-history .dev-empty").textContent).toBe("Nenhum aparelho no histórico");
+    expect($("#dev-clear-history").hidden).toBe(true);
+    expect($("#dev-revoke-all").hidden).toBe(true);
+    expect($("#phone-count").textContent).toBe("");
+  });
+
+  test("desconectar pede confirmação e cancela sozinho depois de 4 segundos", async () => {
+    const after = phoneState({ devices: [] });
+    const { api } = await openDevices(phoneState(), { phone_revoke: async () => after });
+    const button = () => $("#dev-live .dev-revoke");
+    click(button());
+    expect(button().textContent).toBe("Confirmar");
+    expect(button().classList.contains("confirm")).toBe(true);
+    expect(api.phone_revoke).not.toHaveBeenCalled();
+    await tick(4000);
+    expect(button().textContent).toBe("Desconectar");
+    click(button());
+    click(button());
+    await tick(0);
+    expect(api.phone_revoke).toHaveBeenCalledWith("d1");
+    expect($("#dev-live .dev-empty")).not.toBeNull();
+  });
+
+  test("desconectar todos também pede confirmação", async () => {
+    const after = phoneState({
+      devices: [],
+      history: [{ id: "d1", name: "iPhone", ip: "x", last: NOW, revoked: true }],
+    });
+    const { api } = await openDevices(phoneState(), { phone_revoke_all: async () => after });
+    const all = $("#dev-revoke-all");
+    click(all);
+    expect(all.textContent).toBe("Confirmar: desconectar todos");
+    expect(all.classList.contains("confirm")).toBe(true);
+    click(all);
+    await tick(0);
+    expect(api.phone_revoke_all).toHaveBeenCalledTimes(1);
+    expect(all.hidden).toBe(true);
+    expect($("#dev-history .dev-tag.revoked")).not.toBeNull();
+  });
+
+  test("limpar histórico", async () => {
+    const before = phoneState({ history: [{ id: "h", name: "iPad", ip: "x", last: NOW - 100 }] });
+    const { api } = await openDevices(before, { phone_clear_history: async () => phoneState() });
+    click($("#dev-clear-history"));
+    await tick(0);
+    expect(api.phone_clear_history).toHaveBeenCalledTimes(1);
+    expect($("#dev-history .dev-empty")).not.toBeNull();
   });
 });

@@ -304,54 +304,80 @@
         </label>
 
         <div class="phone-on" id="phone-on">
-          <div class="phone-grid">
-            <div class="qr" id="phone-qr"></div>
-            <ol class="phone-steps">
-              <li>
-                <span class="net-badge" id="net-badge">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0" />
-                    <circle cx="12" cy="20" r="1" />
-                  </svg>
-                  <span id="net-text">Conecte o celular ao mesmo Wi-Fi do computador</span>
-                </span>
-              </li>
-              <li>Abra a câmera do celular e aponte para o código</li>
-              <li>Toque no link: cole vídeos para baixar no PC ou salve os arquivos no celular</li>
-            </ol>
-          </div>
+          <nav class="phone-tabs" role="tablist">
+            <button class="active" data-ptab="connect" role="tab" aria-selected="true">Conectar</button>
+            <button data-ptab="devices" role="tab" aria-selected="false">
+              Aparelhos <span class="tab-count" id="phone-count"></span>
+            </button>
+          </nav>
 
-          <div class="phone-devices" id="phone-devices"></div>
-
-          <div class="phone-warn" id="phone-warn">
-            <strong>O Windows marcou esta rede como Pública</strong>
-            <span
-              >Nesse modo o firewall costuma bloquear o celular. Marque a rede como Privada ou libere o Salvaí no
-              firewall (o Windows vai pedir confirmação).</span
-            >
-            <div class="phone-warn-actions">
-              <button class="ghost" id="phone-settings">Abrir configurações de rede</button>
-              <button class="acc-btn primary-soft" id="phone-firewall">Liberar no firewall</button>
+          <div class="phone-pane" id="phone-pane-devices" hidden>
+            <h4>Conectados agora</h4>
+            <div class="dev-list" id="dev-live"></div>
+            <div class="dev-head">
+              <h4>Histórico</h4>
+              <button class="ghost" id="dev-clear-history">Limpar histórico</button>
+            </div>
+            <div class="dev-list" id="dev-history"></div>
+            <div class="dev-foot">
+              <p>
+                Ao desconectar um aparelho, o código do QR muda para ele não conseguir voltar. Os outros continuam
+                conectados.
+              </p>
+              <button class="acc-btn danger-soft" id="dev-revoke-all">Desconectar todos</button>
             </div>
           </div>
 
-          <div class="phone-url">
-            <code id="phone-url"></code>
-            <button class="ghost" id="phone-copy">Copiar</button>
-            <button class="ghost wa-btn" id="phone-whatsapp" title="Enviar o link pelo WhatsApp">
-              <svg viewBox="0 0 24 24">
-                <path d="M20 11.5a8 8 0 0 1-11.8 7L4 20l1.5-4.1A8 8 0 1 1 20 11.5Z" />
-                <path
-                  d="M9 9.5c.3 2.2 2.3 4.2 4.5 4.5l1-1.2 1.8.8c-.2 1-1 1.6-2 1.6A6 6 0 0 1 8.4 9.3c0-1 .6-1.8 1.6-2l.8 1.8Z"
-                />
-              </svg>
-              WhatsApp
-            </button>
+          <div class="phone-pane" id="phone-pane-connect">
+            <div class="phone-grid">
+              <div class="qr" id="phone-qr"></div>
+              <ol class="phone-steps">
+                <li>
+                  <span class="net-badge" id="net-badge">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0" />
+                      <circle cx="12" cy="20" r="1" />
+                    </svg>
+                    <span id="net-text">Conecte o celular ao mesmo Wi-Fi do computador</span>
+                  </span>
+                </li>
+                <li>Abra a câmera do celular e aponte para o código</li>
+                <li>Toque no link: cole vídeos para baixar no PC ou salve os arquivos no celular</li>
+              </ol>
+            </div>
+
+            <div class="phone-devices" id="phone-devices"></div>
+
+            <div class="phone-warn" id="phone-warn">
+              <strong>O Windows marcou esta rede como Pública</strong>
+              <span
+                >Nesse modo o firewall costuma bloquear o celular. Marque a rede como Privada ou libere o Salvaí no
+                firewall (o Windows vai pedir confirmação).</span
+              >
+              <div class="phone-warn-actions">
+                <button class="ghost" id="phone-settings">Abrir configurações de rede</button>
+                <button class="acc-btn primary-soft" id="phone-firewall">Liberar no firewall</button>
+              </div>
+            </div>
+
+            <div class="phone-url">
+              <code id="phone-url"></code>
+              <button class="ghost" id="phone-copy">Copiar</button>
+              <button class="ghost wa-btn" id="phone-whatsapp" title="Enviar o link pelo WhatsApp">
+                <svg viewBox="0 0 24 24">
+                  <path d="M20 11.5a8 8 0 0 1-11.8 7L4 20l1.5-4.1A8 8 0 1 1 20 11.5Z" />
+                  <path
+                    d="M9 9.5c.3 2.2 2.3 4.2 4.5 4.5l1-1.2 1.8.8c-.2 1-1 1.6-2 1.6A6 6 0 0 1 8.4 9.3c0-1 .6-1.8 1.6-2l.8 1.8Z"
+                  />
+                </svg>
+                WhatsApp
+              </button>
+            </div>
+            <details class="phone-others" id="phone-others">
+              <summary>Outros endereços (IPv4/IPv6)</summary>
+              <ul id="phone-others-list"></ul>
+            </details>
           </div>
-          <details class="phone-others" id="phone-others">
-            <summary>Outros endereços (IPv4/IPv6)</summary>
-            <ul id="phone-others-list"></ul>
-          </details>
         </div>
 
         <p class="st-safe">

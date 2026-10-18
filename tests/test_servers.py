@@ -122,8 +122,14 @@ def phone(api, monkeypatch):
     server.stop()
 
 
+def device_cookie(phone):
+    if not phone.session_for(getattr(phone, "test_sid", "")):
+        phone.test_sid = phone.open_session("127.0.0.1", "Mozilla/5.0 (iPhone)")
+    return f"salvai={phone.test_sid}"
+
+
 def phone_call(phone, method, path, headers=None, body=None, host=None, cookie=True):
-    all_headers = {"Cookie": f"salvai={phone.token}"} if cookie else {}
+    all_headers = {"Cookie": device_cookie(phone)} if cookie is True else {"Cookie": cookie} if cookie else {}
     all_headers.update(headers or {})
     return http_request(phone.server.server_address[1], method, path, all_headers, body, host)
 
@@ -132,10 +138,16 @@ def test_phone_entry_and_page(phone):
     status, headers, page = phone_call(phone, "GET", f"/?k={phone.token}", cookie=False)
     assert status == 200 and b"Salva" in page and "Location" not in headers
     assert "HttpOnly" in headers["Set-Cookie"] and headers["Referrer-Policy"] == "no-referrer"
+    sid = headers["Set-Cookie"].split(";")[0].split("=", 1)[1]
+    assert sid != phone.token and phone.session_for(sid)["name"] == "Navegador"
+    status, headers, page = phone_call(phone, "GET", f"/?k={phone.token}", cookie=f"salvai={sid}")
+    assert status == 200 and "Set-Cookie" not in headers and len(phone.sessions) == 1
     status, headers, page = phone_call(phone, "GET", "/")
     assert status == 200 and b"Salva" in page and "Content-Security-Policy" in headers
     assert "Set-Cookie" not in headers
     assert phone_call(phone, "GET", "/?k=errado", cookie=False)[0] == 403
+    assert phone_call(phone, "GET", f"/api/state?k={phone.token}", cookie=False)[0] == 403
+    assert phone_call(phone, "GET", "/api/state", cookie=f"salvai={phone.token}")[0] == 403
     status, headers, body = phone_call(phone, "GET", "/mobile.css")
     assert status == 200 and headers["Content-Type"] == "text/css"
     assert phone_call(phone, "HEAD", "/mobile.js")[0] == 200
@@ -240,8 +252,11 @@ def test_phone_status_and_addresses(api, monkeypatch):
         status = server.status()
         assert status["url"].startswith("http://192.168.0.2:") and status["others"][0].startswith("http://[2804::2]")
         assert server.status()["qr"] is status["qr"] or server.qr[0] == status["url"]
-        server.devices["x"] = {"name": "iPhone", "seen": time.time()}
-        assert server.status()["devices"] == ["iPhone"]
+        sid = server.open_session("192.168.0.9", "Mozilla/5.0 (iPhone)")
+        server.session_for(sid)["seen"] = time.time() - 60
+        device = server.status()["devices"][0]
+        assert device["name"] == "iPhone" and device["ip"] == "192.168.0.9" and device["online"] is False
+        assert server.status()["history"] == []
         server.network = {"ipv4": [], "ipv6": []}
         monkeypatch.setattr(app, "lan_ip", lambda: "10.1.1.1")
         assert server.addresses()[0].startswith("http://10.1.1.1:")
@@ -386,3 +401,69 @@ def test_phone_file_actions(phone, api, monkeypatch):
     api._remember(str(base / "a.mp4"))
     assert json_body(post("/api/files/clear", {})[2]) == {"ok": True} and api._saved == []
     assert phone_call(phone, "POST", "/api/files/trash", {"Origin": "http://evil.com"}, b"{}")[0] == 403
+
+
+def test_phone_revoke_keeps_others_connected(phone, api):
+    first = phone.open_session("192.168.0.5", "Mozilla/5.0 (iPhone)")
+    second = phone.open_session("192.168.0.6", "Mozilla/5.0 (Linux; Android 14)")
+    old_token = phone.token
+    status = phone.status()
+    old_qr = status["qr"]
+    names = [d["name"] for d in status["devices"]]
+    assert names == ["iPhone", "Android"]
+    first_id = phone.session_for(first)["id"]
+    assert phone.revoke(first_id) is True and phone.revoke("nao-existe") is False
+    assert phone.token != old_token and phone.status()["qr"] != old_qr
+    status, _, data = phone_call(phone, "GET", "/api/state", cookie=f"salvai={first}")
+    assert status == 403 and json_body(data)["revoked"] is True and "desconectado" in json_body(data)["error"]
+    assert phone_call(phone, "GET", f"/?k={old_token}", cookie=f"salvai={first}")[0] == 403
+    assert phone_call(phone, "GET", "/api/state", cookie=f"salvai={second}")[0] == 200
+    assert phone_call(phone, "GET", f"/?k={old_token}", cookie=f"salvai={second}")[0] == 200
+    history = phone.status()["history"]
+    assert history[0]["id"] == first_id and history[0]["revoked"] is True
+    assert app.load_config()["phone_history"][0]["revoked"] is True
+    status, headers, _ = phone_call(phone, "GET", f"/?k={phone.token}", cookie=False)
+    assert status == 200 and "Set-Cookie" in headers
+
+
+def test_phone_revoke_all_and_history(phone, api, monkeypatch):
+    monkeypatch.setattr(app, "PHONE_HISTORY_LIMIT", 3)
+    sids = [phone.open_session(f"192.168.0.{n}", "Mozilla/5.0 (Windows NT 10.0)") for n in range(5)]
+    assert len(app.load_config()["phone_history"]) == 3
+    token = phone.token
+    phone.revoke_all()
+    assert phone.sessions == {} and phone.token != token
+    assert all(h["revoked"] for h in phone.status()["history"])
+    for sid in sids[-2:]:
+        assert json_body(phone_call(phone, "GET", "/api/state", cookie=f"salvai={sid}")[2])["revoked"] is True
+
+
+def test_phone_stop_saves_last_seen(api, monkeypatch):
+    monkeypatch.setattr(
+        app, "home_network", lambda: {"ipv4": ["127.0.0.1"], "ipv6": [], "v4_networks": [], "v6_networks": []}
+    )
+    server = app.PhoneServer(api)
+    server.start()
+    sid = server.open_session("192.168.0.7", "Mozilla/5.0 (iPad)")
+    server.session_for(sid)["seen"] = 1234.0
+    server.stop()
+    entry = app.load_config()["phone_history"][0]
+    assert entry["name"] == "iPad" and entry["last"] == 1234.0 and "revoked" not in entry
+    assert server.sessions == {}
+
+
+def test_api_phone_device_controls(api, monkeypatch):
+    monkeypatch.setattr(
+        app, "home_network", lambda: {"ipv4": ["127.0.0.1"], "ipv6": [], "v4_networks": [], "v6_networks": []}
+    )
+    api.phone_start()
+    try:
+        sid = api._phone.open_session("192.168.0.8", "Mozilla/5.0 (iPhone)")
+        device_id = api._phone.session_for(sid)["id"]
+        assert api.phone_revoke(device_id)["devices"] == []
+        api._phone.open_session("192.168.0.9", "Mozilla/5.0 (iPhone)")
+        assert api.phone_revoke_all()["devices"] == []
+        assert len(api.phone_status()["history"]) == 2
+        assert api.phone_clear_history()["history"] == [] and app.load_config()["phone_history"] == []
+    finally:
+        api.phone_stop()
