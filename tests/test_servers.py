@@ -129,10 +129,13 @@ def phone_call(phone, method, path, headers=None, body=None, host=None, cookie=T
 
 
 def test_phone_entry_and_page(phone):
-    status, headers, _ = phone_call(phone, "GET", f"/?k={phone.token}", cookie=False)
-    assert status == 303 and headers["Location"] == "/" and "HttpOnly" in headers["Set-Cookie"]
+    status, headers, page = phone_call(phone, "GET", f"/?k={phone.token}", cookie=False)
+    assert status == 200 and b"Salva" in page and "Location" not in headers
+    assert "HttpOnly" in headers["Set-Cookie"] and headers["Referrer-Policy"] == "no-referrer"
     status, headers, page = phone_call(phone, "GET", "/")
     assert status == 200 and b"Salva" in page and "Content-Security-Policy" in headers
+    assert "Set-Cookie" not in headers
+    assert phone_call(phone, "GET", "/?k=errado", cookie=False)[0] == 403
     status, headers, body = phone_call(phone, "GET", "/mobile.css")
     assert status == 200 and headers["Content-Type"] == "text/css"
     assert phone_call(phone, "HEAD", "/mobile.js")[0] == 200
