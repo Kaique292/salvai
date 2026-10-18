@@ -8,7 +8,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white">
   <a href="https://www.conventionalcommits.org/pt-br/"><img alt="Commits semânticos" src="https://img.shields.io/badge/commits-sem%C3%A2nticos-8E4EC6"></a>
-  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://buymeacoffee.com/kaiqueamaral"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
 </p>
 
 <p align="center">
@@ -292,10 +292,10 @@ O FFmpeg é distribuído junto com o app sob a licença GPL; o código-fonte est
 Se o Salvaí te ajudou, considere pagar um café — isso ajuda a manter o app atualizado.
 
 <p align="center">
-  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Me pague um café" src="https://img.buymeacoffee.com/button-api/?text=Me%20pague%20um%20caf%C3%A9&emoji=%E2%98%95&slug=kaiqueamaru&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff" height="48"></a>
+  <a href="https://buymeacoffee.com/kaiqueamaral"><img alt="Me pague um café" src="https://img.buymeacoffee.com/button-api/?text=Me%20pague%20um%20caf%C3%A9&emoji=%E2%98%95&slug=kaiqueamaral&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff" height="48"></a>
 </p>
 
 <p align="center">
   <a href="https://github.com/Kaique292/salvai/releases/latest"><img alt="Versão" src="https://img.shields.io/github/v/release/Kaique292/salvai?label=vers%C3%A3o&color=E5484D"></a>
-  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://buymeacoffee.com/kaiqueamaral"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
 </p>
