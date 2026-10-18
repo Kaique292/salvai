@@ -1045,3 +1045,34 @@ def test_stale_bundle_detects_relaunch_over_old_extraction(monkeypatch, tmp_path
     assert app.stale_bundle() is True
     monkeypatch.setattr(app.sys, "executable", str(tmp_path / "sumiu.exe"))
     assert app.stale_bundle() is False
+
+
+def test_parse_release_notes_keeps_what_users_care_about():
+    body = """## [1.3.0](https://github.com/x/compare/v1...v2) (2026-10-18)
+
+
+### ✨ Novidades
+
+* mostra os aparelhos conectados ([08a8a84](https://github.com/x/commit/08a8a84aa))
+* usa **negrito** e [links](https://exemplo.org)
+
+
+### 🐛 Correções
+
+- reabre a versão nova ([f5b0999](https://github.com/x/commit/f5b0999))
+* ([abcdef1](https://github.com/x/commit/abcdef1))
+*
+
+### 📝 Documentação
+
+* explica a aba de aparelhos ([61d6516](https://github.com/x/commit/61d6516))
+
+### 🤖 Automação
+
+* ajusta o CI
+"""
+    assert app.parse_release_notes(body) == [
+        {"title": "✨ Novidades", "items": ["Mostra os aparelhos conectados", "Usa negrito e links"]},
+        {"title": "🐛 Correções", "items": ["Reabre a versão nova"]},
+    ]
+    assert app.parse_release_notes("* solto\n### 📝 Documentação\n* nada") == []

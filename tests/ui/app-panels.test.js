@@ -442,11 +442,11 @@ describe("avisos de atualização", () => {
     expect(api.restart_app).toHaveBeenCalledTimes(1);
     click(later);
     expect(api.skip_update).not.toHaveBeenCalled();
-    expect($("#notice-title").textContent).toBe("Salvaí 2.0.0 disponível");
+    expect($("#notice-title").textContent.trim()).toBe("Salvaí 2.0.0 disponível");
+    expect($("#notice-title .notice-info")).not.toBeNull();
     expect(action.textContent).toBe("Atualizar agora");
     expect(later.textContent).toBe("Depois");
-    click($("#notice-desc .notice-link"));
-    expect(api.open_release).toHaveBeenCalledWith("https://rel");
+    expect($("#notice-desc .notice-link").textContent).toBe("o que muda");
     click(later);
     expect(api.skip_update).toHaveBeenCalledWith("app", "2.0.0");
     expect(el.classList.contains("show")).toBe(false);
@@ -774,5 +774,160 @@ describe("aparelhos conectados", () => {
     await tick(0);
     expect(api.phone_clear_history).toHaveBeenCalledTimes(1);
     expect($("#dev-history .dev-empty")).not.toBeNull();
+  });
+});
+
+describe("o que muda entre as versões", () => {
+  const NOTES = {
+    ok: true,
+    current: "1.0.0",
+    url: "https://github.com/Kaique292/salvai/releases",
+    releases: [
+      {
+        version: "1.3.0",
+        date: "2026-10-18",
+        sections: [
+          { title: "✨ Novidades", items: ["Aba de aparelhos <conectados>"] },
+          { title: "🐛 Correções", items: ["Link do QR no Safari", "Reinício após atualizar"] },
+        ],
+      },
+      { version: "1.2.1", date: "", sections: [] },
+    ],
+  };
+
+  async function appNotice(overrides = {}) {
+    const result = await setup({ release_notes: async () => NOTES, ...overrides });
+    window.app.updateAvailable({ kind: "app", latest: "1.3.0", current: "1.0.0", url: "https://rel" });
+    return result;
+  }
+
+  test("o ícone abre a lista de mudanças de todas as versões no meio", async () => {
+    const { api } = await appNotice();
+    click($("#notice-title .notice-info"));
+    expect($("#notes-modal").classList.contains("open")).toBe(true);
+    expect($("#notes-title").textContent).toBe("O que muda da 1.0.0 para a 1.3.0");
+    expect($("#notes-body .notes-loading")).not.toBeNull();
+    await tick(0);
+    const versions = [...document.querySelectorAll(".notes-version")];
+    expect(versions).toHaveLength(2);
+    expect(versions[0].querySelector("h4").textContent).toBe("Versão 1.3.0 18/10/2026");
+    expect([...versions[0].querySelectorAll("h5")].map((h) => h.textContent)).toEqual(["✨ Novidades", "🐛 Correções"]);
+    expect(versions[0].querySelector("li").textContent).toBe("Aba de aparelhos <conectados>");
+    expect(versions[0].querySelectorAll("li")).toHaveLength(3);
+    expect(versions[1].querySelector("h4").textContent).toBe("Versão 1.2.1 ");
+    expect(versions[1].querySelector("h5").textContent).toBe("Melhorias internas");
+    click($("#notes-github"));
+    expect(api.open_release).toHaveBeenCalledWith("https://github.com/Kaique292/salvai/releases");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect($("#notes-modal").classList.contains("open")).toBe(false);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
+  test("o link o que muda também abre, e Atualizar agora começa a atualização", async () => {
+    const { api } = await appNotice({ update_app: () => new Promise(() => {}) });
+    click($("#notice-desc .notice-link"));
+    await tick(0);
+    click($("#notes-update"));
+    expect($("#notes-modal").classList.contains("open")).toBe(false);
+    expect(api.update_app).toHaveBeenCalledTimes(1);
+    expect($("#notice-action").disabled).toBe(true);
+  });
+
+  test("não atualiza pelo modal se o aviso já mudou ou foi para a página manual", async () => {
+    let n = 0;
+    const { api } = await appNotice({
+      update_app: async () => (++n === 1 ? { ok: false, message: "Sem permissão", url: "https://rel2" } : { ok: true }),
+    });
+    click($("#notice-action"));
+    await tick(0);
+    expect($("#notice-action").textContent).toBe("Abrir página");
+    click($("#notice-desc"));
+    window.app.updateAvailable({ kind: "app", latest: "1.3.0", current: "1.0.0", url: "https://rel" });
+    click($("#notice-later"));
+    window.app.updateAvailable({ kind: "app", latest: "1.3.0", current: "1.0.0", url: "https://rel" });
+    const stale = $("#notice-title .notice-info");
+    click(stale);
+    await tick(0);
+    click($("#notice-later"));
+    click($("#notes-update"));
+    expect(api.update_app).toHaveBeenCalledTimes(1);
+  });
+
+  test("bloqueia a atualização pelo modal quando o aviso foi para a página manual", async () => {
+    const { api } = await appNotice({
+      update_app: async () => ({ ok: false, message: "Sem permissão", url: "https://rel2" }),
+    });
+    click($("#notice-action"));
+    await tick(0);
+    window.app.updateAvailable({ kind: "engine", latest: "2026.9.9", current: "2026.8.19" });
+    click($("#notice-desc .notice-link") || $("#notice-title .notice-info"));
+    await tick(0);
+    click($("#notes-update"));
+    expect(api.update_app).toHaveBeenCalledTimes(1);
+  });
+
+  test("mostra aviso quando não há notas ou quando não dá para buscar", async () => {
+    await appNotice({ release_notes: async () => ({ ...NOTES, releases: [] }) });
+    click($("#notice-title .notice-info"));
+    await tick(0);
+    expect($("#notes-body .notes-empty").textContent).toBe("Nenhuma novidade registrada para essa versão.");
+    click($("#notes-modal .modal-close"));
+    expect($("#notes-modal").classList.contains("open")).toBe(false);
+  });
+
+  test("avisa quando não dá para buscar as novidades", async () => {
+    const { api } = await appNotice({ release_notes: async () => ({ ok: false, url: "https://x" }) });
+    click($("#notice-title .notice-info"));
+    await tick(0);
+    expect($("#notes-body .notes-empty").textContent).toContain("Não deu para buscar");
+    click($("#notes-github"));
+    expect(api.open_release).toHaveBeenCalledWith("https://x");
+  });
+
+  test("Ver no GitHub não faz nada antes de carregar", async () => {
+    const { api } = await appNotice({ release_notes: () => new Promise(() => {}) });
+    click($("#notice-title .notice-info"));
+    click($("#notes-github"));
+    expect(api.open_release).not.toHaveBeenCalled();
+  });
+
+  test("não repete o mesmo aviso na fila", async () => {
+    await setup();
+    const notice = { kind: "app", latest: "1.3.0", current: "1.0.0", url: "u" };
+    window.app.updateAvailable({ kind: "engine", latest: "2026.9.9", current: "2026.8.19" });
+    window.app.updateAvailable(notice);
+    window.app.updateAvailable({ ...notice });
+    window.app.updateAvailable({ kind: "engine", latest: "2026.9.9", current: "2026.8.19" });
+    click($("#notice-later"));
+    expect($("#notice-title").textContent.trim()).toBe("Salvaí 1.3.0 disponível");
+    click($("#notice-later"));
+    expect($("#notice").classList.contains("show")).toBe(false);
+  });
+});
+
+describe("procurar atualizações", () => {
+  test("encontra, fecha o armazenamento e avisa", async () => {
+    let result = { found: 1, offline: false };
+    const { api } = await setup({ storage_info: async () => storageInfo(), check_updates_now: async () => result });
+    click($("#storage-btn"));
+    await tick(0);
+    const btn = $("#st-check");
+    click(btn);
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain("Procurando…");
+    await tick(0);
+    expect(api.check_updates_now).toHaveBeenCalledTimes(1);
+    expect($("#storage-modal").classList.contains("open")).toBe(false);
+    expect(btn.textContent).toBe("Procurar atualizações");
+    result = { found: 0, offline: false };
+    click(btn);
+    await tick(0);
+    expect(btn.textContent).toBe("Você já está na versão mais recente");
+    await tick(3500);
+    expect(btn.textContent).toBe("Procurar atualizações");
+    result = { found: 0, offline: true };
+    click(btn);
+    await tick(0);
+    expect(btn.textContent).toBe("Sem conexão. Tente de novo");
   });
 });

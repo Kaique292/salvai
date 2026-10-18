@@ -261,6 +261,7 @@
 
         <div class="modal-foot">
           <span class="st-version" id="st-version"></span>
+          <button class="ghost" id="st-check">Procurar atualizações</button>
           <button class="ghost" data-close>Fechar</button>
           <button class="primary" id="st-clear">Limpar cache</button>
         </div>
@@ -274,6 +275,34 @@
         <button data-value="MP3">MP3</button>
       </div>
       <div class="cfg-list"></div>
+    </div>
+
+    <div class="modal" id="notes-modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel notes-panel" role="dialog" aria-modal="true" aria-labelledby="notes-title">
+        <div class="modal-head">
+          <div class="modal-icon notes-icon">
+            <svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5M12 7.5v.5" />
+            </svg>
+          </div>
+          <div class="modal-titles">
+            <h3 id="notes-title">O que muda</h3>
+            <p>Tudo o que mudou desde a versão que você usa hoje.</p>
+          </div>
+          <button class="modal-close" data-close title="Fechar (Esc)">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <div class="notes-body" id="notes-body"></div>
+        <div class="modal-foot">
+          <button class="ghost" id="notes-github">Ver no GitHub</button>
+          <span class="notes-spacer"></span>
+          <button class="ghost" data-close>Fechar</button>
+          <button class="primary" id="notes-update">Atualizar agora</button>
+        </div>
+      </div>
     </div>
 
     <div class="modal" id="phone-modal" aria-hidden="true">

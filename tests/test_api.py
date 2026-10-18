@@ -571,19 +571,19 @@ def test_restart_skip_and_release(api, monkeypatch, instant_timer):
     assert opened == ["https://github.com/Kaique292/salvai/releases/tag/v2"]
 
 
-def test_check_updates_fetches_and_caches(api, monkeypatch, no_sleep):
+def release_latest(repo):
+    if repo == "yt-dlp/yt-dlp":
+        return {"tag_name": "2099.1.1"}
+    return {"tag_name": "v1.5.0", "html_url": "https://github.com/Kaique292/salvai/releases/tag/v1.5.0"}
+
+
+def test_check_updates_on_every_open(api, monkeypatch, no_sleep):
     monkeypatch.setattr(app, "APP_VERSION", "1.0.0")
-
-    def latest(repo):
-        if repo == "yt-dlp/yt-dlp":
-            return {"tag_name": "2099.1.1"}
-        return {"tag_name": "v1.5.0", "html_url": "https://github.com/Kaique292/salvai/releases/tag/v1.5.0"}
-
-    monkeypatch.setattr(app, "github_latest", latest)
+    asked = []
+    monkeypatch.setattr(app, "github_latest", lambda repo: (asked.append(repo), release_latest(repo))[1])
     api._cfg["skip_app"] = "1.5.0"
     api._check_updates()
     assert sum("updateAvailable" in js for js in api._window.js) == 1
-    assert len(app.load_config()["update_check"]["notices"]) == 2
     api._window.js.clear()
     api._window.fail.add("run_js")
     api._check_updates()
@@ -591,19 +591,27 @@ def test_check_updates_fetches_and_caches(api, monkeypatch, no_sleep):
     api._cfg.pop("skip_app")
     api._check_updates()
     assert sum("updateAvailable" in js for js in api._window.js) == 2
+    assert asked == ["yt-dlp/yt-dlp", "Kaique292/salvai"] * 3
+
+
+def test_check_updates_now_ignores_skip_and_reports_offline(api, monkeypatch):
+    monkeypatch.setattr(app, "APP_VERSION", "1.0.0")
+    monkeypatch.setattr(app, "github_latest", release_latest)
+    api._cfg["skip_app"] = "1.5.0"
+    assert api.check_updates_now() == {"found": 2, "offline": False}
+    assert sum("updateAvailable" in js for js in api._window.js) == 2
+    monkeypatch.setattr(app, "APP_VERSION", "9.0.0")
+    monkeypatch.setattr(app, "github_latest", lambda repo: {"tag_name": "0.0.1", "html_url": "u"})
+    assert api.check_updates_now() == {"found": 0, "offline": False}
+    monkeypatch.setattr(app, "github_latest", lambda repo: (_ for _ in ()).throw(OSError()))
+    assert api.check_updates_now() == {"found": 0, "offline": True}
 
 
 def test_fetch_update_notices_survives_errors(api, monkeypatch):
     monkeypatch.setattr(app, "github_latest", lambda repo: (_ for _ in ()).throw(OSError()))
-    assert api._fetch_update_notices() == []
+    assert api._fetch_update_notices() == ([], True)
     monkeypatch.setattr(app, "github_latest", lambda repo: {"tag_name": "0.0.1", "html_url": "u"})
-    assert api._fetch_update_notices() == []
-
-
-def test_still_relevant(api, monkeypatch):
-    monkeypatch.setattr(app, "APP_VERSION", "1.2.0")
-    assert api._still_relevant({"kind": "app", "latest": "1.3.0"})
-    assert not api._still_relevant({"kind": "engine", "latest": "2026.1.1"})
+    assert api._fetch_update_notices() == ([], False)
 
 
 def test_paste_theme_and_shown(api, monkeypatch, instant_timer):
@@ -1034,3 +1042,25 @@ def test_share_whatsapp(api, monkeypatch):
     assert api.share_whatsapp() == {"ok": True, "app": "web"}
     assert opened[-1].startswith("https://web.whatsapp.com/send?text=")
     assert app.urllib.parse.quote("http://10.0.0.2:47800/?k=x") in opened[-1]
+
+
+def test_release_notes_between_versions(api, monkeypatch):
+    monkeypatch.setattr(app, "APP_VERSION", "1.2.0")
+    releases = [
+        {"tag_name": "v1.2.1", "published_at": "2026-10-18T22:46:12Z", "body": "### 🐛 Correções\n\n* corrige"},
+        {"tag_name": "v1.3.0", "published_at": None, "body": None},
+        {"tag_name": "v1.2.0", "body": "### ✨ Novidades\n* antiga"},
+        {"tag_name": "v1.4.0", "draft": True, "body": ""},
+        {"tag_name": "v1.5.0-beta", "prerelease": True, "body": ""},
+    ]
+    asked = []
+    monkeypatch.setattr(app, "http_get", lambda url, timeout=60: (asked.append(url), json.dumps(releases).encode())[1])
+    result = api.release_notes()
+    assert asked == ["https://api.github.com/repos/Kaique292/salvai/releases?per_page=30"]
+    assert result["ok"] and result["current"] == "1.2.0" and result["url"].endswith("/salvai/releases")
+    assert [r["version"] for r in result["releases"]] == ["1.3.0", "1.2.1"]
+    assert result["releases"][0] == {"version": "1.3.0", "date": "", "sections": []}
+    assert result["releases"][1]["date"] == "2026-10-18"
+    assert result["releases"][1]["sections"] == [{"title": "🐛 Correções", "items": ["Corrige"]}]
+    monkeypatch.setattr(app, "http_get", lambda url, timeout=60: (_ for _ in ()).throw(OSError()))
+    assert api.release_notes() == {"ok": False, "url": "https://github.com/Kaique292/salvai/releases"}

@@ -650,13 +650,32 @@ def http_get(url: str, timeout: float = 60) -> bytes:
         return r.read()
 
 
+HIDDEN_NOTE_SECTIONS = ("Documentação", "Automação", "Manutenção", "Testes", "Estilo", "Build", "internas")
+
+
+def parse_release_notes(body: str) -> list[dict]:
+    sections, current = [], None
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("### "):
+            title = line[4:].strip()
+            current = None if any(h in title for h in HIDDEN_NOTE_SECTIONS) else {"title": title, "items": []}
+            if current:
+                sections.append(current)
+        elif current is not None and line[:2] in ("* ", "- "):
+            text = re.sub(r"\s*\(\[[0-9a-f]{7,40}\]\([^)]*\)\)", "", line[2:])
+            text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text).replace("**", "").strip()
+            if text:
+                current["items"].append(text[0].upper() + text[1:])
+    return [s for s in sections if s["items"]]
+
+
 def github_latest(repo: str) -> dict:
     return json.loads(http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=10))
 
 
 PHONE_PORT = 47800
 PEEK_TTL = 15 * 60
-UPDATE_CHECK_INTERVAL = 6 * 3600
 NETWORK_TTL = 5 * 60
 MEDIA_EXTENSIONS = {".mp4", ".mp3", ".m4a", ".webm", ".mkv", ".mov", ".opus", ".ogg", ".wav", ".flac", ".jpg", ".png"}
 CREATE_NO_WINDOW = 0x08000000
@@ -2545,42 +2564,61 @@ class Api:
 
     def _check_updates(self):
         time.sleep(3)
-        cache = self._cfg.get("update_check") or {}
-        if time.time() - cache.get("at", 0) < UPDATE_CHECK_INTERVAL:
-            notices = [n for n in cache.get("notices", []) if self._still_relevant(n)]
-        else:
-            notices = self._fetch_update_notices()
-            self._cfg["update_check"] = {"at": time.time(), "notices": notices}
-            save_config(self._cfg)
+        notices, _ = self._fetch_update_notices()
+        self._show_notices(notices, respect_skip=True)
+
+    def release_notes(self) -> dict:
+        page = f"https://github.com/{APP_REPO}/releases"
+        try:
+            releases = json.loads(http_get(f"https://api.github.com/repos/{APP_REPO}/releases?per_page=30", timeout=10))
+        except Exception:
+            return {"ok": False, "url": page}
+        found = []
+        for release in releases:
+            version = release["tag_name"].lstrip("v")
+            if release.get("draft") or release.get("prerelease") or version_key(version) <= version_key(APP_VERSION):
+                continue
+            found.append(
+                {
+                    "version": version,
+                    "date": (release.get("published_at") or "")[:10],
+                    "sections": parse_release_notes(release.get("body") or ""),
+                }
+            )
+        found.sort(key=lambda r: version_key(r["version"]), reverse=True)
+        return {"ok": True, "current": APP_VERSION, "releases": found, "url": page}
+
+    def check_updates_now(self) -> dict:
+        notices, offline = self._fetch_update_notices()
+        self._show_notices(notices, respect_skip=False)
+        return {"found": len(notices), "offline": offline}
+
+    def _show_notices(self, notices: list[dict], respect_skip: bool):
         for notice in notices:
-            if self._cfg.get(f"skip_{notice['kind']}") == notice["latest"]:
+            if respect_skip and self._cfg.get(f"skip_{notice['kind']}") == notice["latest"]:
                 continue
             try:
                 self._window.run_js(f"window.app && app.updateAvailable({json.dumps(notice)})")
             except Exception:
                 pass
 
-    def _still_relevant(self, notice: dict) -> bool:
-        current = engine().version.__version__ if notice["kind"] == "engine" else APP_VERSION
-        return version_key(notice["latest"]) > version_key(current)
-
-    def _fetch_update_notices(self) -> list[dict]:
-        notices = []
+    def _fetch_update_notices(self) -> tuple[list[dict], bool]:
+        notices, failures = [], 0
         try:
             latest = github_latest("yt-dlp/yt-dlp")["tag_name"]
             current = engine().version.__version__
             if version_key(latest) > version_key(current):
                 notices.append({"kind": "engine", "current": current, "latest": latest})
         except Exception:
-            pass
+            failures += 1
         try:
             release = github_latest(APP_REPO)
             latest = release["tag_name"].lstrip("v")
             if version_key(latest) > version_key(APP_VERSION):
                 notices.append({"kind": "app", "current": APP_VERSION, "latest": latest, "url": release["html_url"]})
         except Exception:
-            pass
-        return notices
+            failures += 1
+        return notices, failures == 2
 
     def paste(self) -> str:
         try:
