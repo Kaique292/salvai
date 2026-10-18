@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="Salvaí — Viu, gostou, salvaí." width="100%">
+  <img src="docs/images/banner.png" alt="Salvaí — app para baixar vídeos e músicas do YouTube, Instagram e TikTok em MP4 e MP3 no Windows" width="100%">
 </p>
+
+<h1 align="center">Salvaí — baixe vídeos e músicas em MP4 e MP3 no Windows</h1>
 
 <p align="center">
   <a href="https://github.com/Kaique292/salvai/releases/latest"><img alt="Versão" src="https://img.shields.io/github/v/release/Kaique292/salvai?label=vers%C3%A3o&color=E5484D"></a>
@@ -23,10 +25,14 @@
   <a href="#-o-windows-disse-que-é-vírus">O Windows disse que é vírus?</a>
   &nbsp;·&nbsp;
   <a href="#-usando-com-o-claude">Usar com o Claude</a>
+  &nbsp;·&nbsp;
+  <a href="https://kaique292.github.io/salvai/">Site</a>
+  &nbsp;·&nbsp;
+  <a href="#-in-english">English</a>
 </p>
 
 <p align="center">
-  <img src="docs/images/app-escuro.png" alt="Salvaí no tema escuro" width="90%">
+  <img src="docs/images/app-escuro.png" alt="Salvaí baixando vídeos do YouTube e do TikTok em MP4 e MP3 no tema escuro" width="90%">
 </p>
 
 ## ✨ O que ele faz
@@ -282,6 +288,16 @@ Os commits seguem o padrão **[Conventional Commits](https://www.conventionalcom
 Exemplo: `feat: adiciona suporte a playlists do SoundCloud`. Um `!` depois do tipo (`feat!:`) marca uma mudança incompatível e sobe a versão principal.
 
 As versões e o [CHANGELOG](CHANGELOG.md) são gerados pelo [release-please](https://github.com/googleapis/release-please): a cada push na `main` ele abre um PR de release; ao aprovar, a versão é publicada e o GitHub gera e anexa o `Salvai.exe`, o `salvai-mcp.exe` e o `SHA256SUMS.txt`.
+
+## 🇺🇸 In English
+
+**Salvaí** is a free, ad-free **YouTube, Instagram, TikTok, X and Facebook video downloader for Windows**. Paste a link and save it as **MP4 video (up to 4K)** or **MP3 audio (up to 320 kbps)** — it also supports 1,800+ other sites, playlists, a download queue with priorities, and private content from accounts you connect.
+
+- **Phone mode:** scan a QR code to send links to your PC, stream what was downloaded and save it to your phone over Wi-Fi — no app to install.
+- **Claude integration (MCP):** ask Claude to search, download and organize videos and music into folders.
+- **Single `.exe`, no install**, no telemetry, updates verified by SHA-256.
+
+[**⬇️ Download for Windows**](https://github.com/Kaique292/salvai/releases/latest/download/Salvai.exe) · The interface is in Portuguese (pt-BR).
 
 ## 🙏 Feito com
 
