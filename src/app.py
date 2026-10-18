@@ -1202,6 +1202,23 @@ class PhoneServer:
         }
 
 
+def fresh_env() -> dict:
+    env = dict(os.environ)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def stale_bundle() -> bool:
+    if not getattr(sys, "frozen", False) or not hasattr(sys, "_MEIPASS"):
+        return False
+    try:
+        built = Path(sys.executable).stat().st_mtime
+        bundle = Path(sys._MEIPASS).stat()
+    except OSError:
+        return False
+    return built > getattr(bundle, "st_birthtime", bundle.st_ctime) + 2
+
+
 def whatsapp_installed() -> bool:
     try:
         winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "whatsapp"))
@@ -2420,7 +2437,7 @@ class Api:
             args = [sys.executable]
         else:
             args = [sys.executable, str(Path(__file__).resolve())]
-        subprocess.Popen(args, close_fds=True, creationflags=0x00000008)
+        subprocess.Popen(args, close_fds=True, creationflags=0x00000008, env=fresh_env())
         threading.Timer(0.3, self._window.destroy).start()
 
     def skip_update(self, kind: str, version: str):
@@ -2676,6 +2693,10 @@ def main():
     if "--selftest" in sys.argv:
         splash_close()
         return selftest(sys.argv[sys.argv.index("--selftest") + 1])
+    if stale_bundle():
+        splash_close()
+        subprocess.Popen([sys.executable, *sys.argv[1:]], close_fds=True, creationflags=0x00000008, env=fresh_env())
+        return
     cleanup_old_versions()
     threading.Thread(target=cleanup_leftovers, daemon=True).start()
     if WEBVIEW_CLEAR_FLAG.exists():
