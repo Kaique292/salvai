@@ -142,7 +142,7 @@ No app, clique no ícone de pessoa → **Contas** → **Entrar**. Abre a página
 
 ## 🤖 Usando com o Claude
 
-O Salvaí vem com um conector **MCP** (`salvai-mcp.exe`) que deixa o Claude buscar, baixar e organizar vídeos e músicas para você. Exemplo:
+O Salvaí traz um conector **MCP** que deixa o Claude buscar, baixar e organizar vídeos e músicas para você. Exemplo:
 
 > _"Estou estudando estequiometria para o vestibular. Encontra 3 boas aulas no YouTube, baixa em 720p na pasta Vestibular/Química e uma playlist lo-fi em MP3 para eu ouvir estudando."_
 
@@ -150,33 +150,15 @@ Os downloads aparecem na fila do app com o selo **✦ Claude**, cada um na pasta
 
 ### Como conectar
 
-1. Baixe o **[salvai-mcp.exe](https://github.com/Kaique292/salvai/releases/latest/download/salvai-mcp.exe)** e coloque **na mesma pasta** do `Salvai.exe`.
-2. Conecte ao seu app de IA:
+**No Claude Desktop é automático.** Ao abrir, o Salvaí baixa o conector (conferido pelo SHA-256 oficial) e se registra no Claude Desktop sozinho. Quando aparecer o aviso **"Salvaí conectado ao Claude"**, feche e abra o Claude Desktop — pronto. Se você remover o Salvaí da configuração do Claude, ele não é adicionado de novo.
 
-<details>
-<summary><b>Claude Desktop</b></summary>
-
-Abra **Configurações** → **Desenvolvedor** → **Editar configuração** e adicione em `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "salvai": {
-      "command": "C:\\Users\\<você>\\AppData\\Local\\Programs\\Salvai\\salvai-mcp.exe"
-    }
-  }
-}
-```
-
-Reinicie o Claude Desktop.
-
-</details>
+O conector fica em `%APPDATA%\Salvai\mcp\salvai-mcp.exe` e se atualiza junto com o app.
 
 <details>
 <summary><b>Claude Code</b></summary>
 
 ```powershell
-claude mcp add --scope user salvai -- "C:\Users\<você>\AppData\Local\Programs\Salvai\salvai-mcp.exe"
+claude mcp add --scope user salvai -- "$env:APPDATA\Salvai\mcp\salvai-mcp.exe"
 ```
 
 </details>
@@ -184,7 +166,7 @@ claude mcp add --scope user salvai -- "C:\Users\<você>\AppData\Local\Programs\S
 <details>
 <summary><b>Outros apps (Cursor, VS Code…)</b></summary>
 
-Qualquer app que aceite servidores MCP locais (stdio) funciona: aponte o comando para o `salvai-mcp.exe`.
+Qualquer app que aceite servidores MCP locais (stdio) funciona: aponte o comando para `%APPDATA%\Salvai\mcp\salvai-mcp.exe`.
 
 </details>
 
@@ -214,7 +196,7 @@ Clicou em **Depois**? O aviso daquela versão não aparece mais; uma versão mai
 
 No ícone de banco de dados você vê quanto o app ocupa e o que é cada parte: cache da interface, dados do YouTube, sobras de aberturas que foram fechadas à força e componentes baixados (Deno e atualizações do motor). Marque o que quiser e limpe — **suas configurações e os vídeos baixados nunca são apagados**.
 
-Os vídeos não passam pelo cache: vão direto para a pasta escolhida, e os pedaços temporários do download são apagados assim que o arquivo fica pronto. As sobras de aberturas fechadas à força são limpas sozinhas na próxima abertura. Os ~90 MB que sempre ficam são o **ffmpeg**, essencial para juntar vídeo e áudio e converter para MP3 — por isso ele aparece travado na lista.
+Os vídeos não passam pelo cache: vão direto para a pasta escolhida, e os pedaços temporários do download são apagados assim que o arquivo fica pronto. As sobras de aberturas fechadas à força são limpas sozinhas na próxima abertura. O que sempre fica é **essencial**: o ffmpeg (~90 MB), que junta vídeo e áudio e converte para MP3, e o conector do Claude (~25 MB). Por isso eles aparecem travados na lista.
 
 ## ❓ Perguntas frequentes
 
