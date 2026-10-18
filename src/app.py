@@ -6,11 +6,14 @@ import hashlib
 import http.cookiejar
 import importlib.metadata
 import io
+import ipaddress
 import json
+import mimetypes
 import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -48,6 +51,9 @@ def splash_close() -> None:
 
 splash_step(64, "Iniciando…")
 import imageio_ffmpeg
+import pystray
+import segno
+from PIL import Image
 
 splash_step(68, "Carregando a interface…")
 import webview
@@ -607,6 +613,453 @@ def github_latest(repo: str) -> dict:
     return json.loads(http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=10))
 
 
+PHONE_PORT = 47800
+MEDIA_EXTENSIONS = {".mp4", ".mp3", ".m4a", ".webm", ".mkv", ".mov", ".opus", ".ogg", ".wav", ".flac", ".jpg", ".png"}
+CREATE_NO_WINDOW = 0x08000000
+
+
+def lan_ip() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+
+
+NETWORK_SCRIPT = (
+    "Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -or $_.IPv6DefaultGateway } | ForEach-Object { "
+    "[pscustomobject]@{ alias = $_.InterfaceAlias; media = $_.NetAdapter.PhysicalMediaType; "
+    "network = $_.NetProfile.Name; category = [string]$_.NetProfile.NetworkCategory; "
+    "ipv4 = @($_.IPv4Address | ForEach-Object { $_.IPAddress }); "
+    "ipv6 = @($_.IPv6Address | ForEach-Object { $_.IPAddress }) } } | ConvertTo-Json -Depth 3 -Compress"
+)
+
+
+def read_interfaces() -> list[dict]:
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", NETWORK_SCRIPT],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=CREATE_NO_WINDOW,
+        timeout=20,
+    ).stdout.strip()
+    data = json.loads(out) if out else []
+    return data if isinstance(data, list) else [data]
+
+
+def is_private_v4(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.version == 4 and ip.is_private and not ip.is_link_local and not ip.is_loopback
+
+
+def home_network() -> dict:
+    primary = lan_ip()
+    try:
+        interfaces = read_interfaces()
+    except Exception:
+        interfaces = []
+    candidates = [i for i in interfaces if any(is_private_v4(a) for a in i.get("ipv4") or [])]
+    chosen = next((i for i in candidates if primary in (i.get("ipv4") or [])), candidates[0] if candidates else None)
+    if not chosen:
+        chosen = next(iter(interfaces), None)
+    if not chosen:
+        return {"kind": None, "name": None, "public": False, "ipv4": [primary], "ipv6": [], "v6_networks": []}
+    media = (chosen.get("media") or "").lower()
+    ipv6 = [a for a in chosen.get("ipv6") or [] if not a.lower().startswith("fe80")]
+    return {
+        "kind": "wifi" if "802.11" in media or "wireless" in media else "cabo",
+        "name": chosen.get("network"),
+        "public": (chosen.get("category") or "").lower() == "public",
+        "ipv4": [a for a in chosen.get("ipv4") or [] if is_private_v4(a)],
+        "ipv6": ipv6,
+        "v6_networks": [str(ipaddress.ip_network(f"{a}/64", strict=False)) for a in ipv6],
+    }
+
+
+def device_name(user_agent: str) -> str:
+    ua = user_agent or ""
+    for marker, name in (
+        ("iPhone", "iPhone"),
+        ("iPad", "iPad"),
+        ("Android", "Android"),
+        ("Windows", "Windows"),
+        ("Mac", "Mac"),
+    ):
+        if marker in ua:
+            return name
+    return "Navegador"
+
+
+def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, head: bool = False) -> None:
+    stat = path.stat()
+    size = stat.st_size
+    etag = f'"{size:x}-{int(stat.st_mtime):x}"'
+    start, end, status = 0, size - 1, 200
+    match = re.match(r"bytes=(\d*)-(\d*)$", (handler.headers.get("Range") or "").strip())
+    if_range = handler.headers.get("If-Range")
+    if match and size and (not if_range or if_range == etag):
+        if match.group(1):
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else size - 1
+        elif match.group(2):
+            start = max(0, size - int(match.group(2)))
+        end = min(end, size - 1)
+        if start > end:
+            handler.send_response(416)
+            handler.send_header("Content-Range", f"bytes */{size}")
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return
+        status = 206
+    handler.send_response(status)
+    handler.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+    handler.send_header("Content-Length", str(end - start + 1))
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("ETag", etag)
+    handler.send_header("Last-Modified", email.utils.formatdate(stat.st_mtime, usegmt=True))
+    fallback = re.sub(r"[^ -~]", "_", path.name).replace('"', "")
+    disposition = "attachment" if as_attachment else "inline"
+    handler.send_header(
+        "Content-Disposition",
+        f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{urllib.parse.quote(path.name)}",
+    )
+    if status == 206:
+        handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    handler.end_headers()
+    if head:
+        return
+    with open(path, "rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = f.read(min(1 << 20, remaining))
+            if not chunk:
+                break
+            handler.wfile.write(chunk)
+            remaining -= len(chunk)
+
+
+ACTIVE_STATUSES = ("setup", "queued", "fetching", "downloading", "processing", "paused")
+
+
+def icon_path() -> Path:
+    for candidate in (BASE / "icon.ico", BASE.parent / "assets" / "icon.ico"):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("icon.ico")
+
+
+class Tray:
+    def __init__(self, api: "Api"):
+        self.api, self.icon = api, None
+
+    def start(self):
+        api = self.api
+        menu = pystray.Menu(
+            pystray.MenuItem("Abrir Salvaí", lambda: api._show_from_tray(), default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(lambda item: api._downloads_label(), None, enabled=False),
+            pystray.MenuItem(
+                "Modo celular", lambda: api._toggle_phone_from_tray(), checked=lambda item: api._phone.running
+            ),
+            pystray.MenuItem("Abrir pasta de downloads", lambda: os.startfile(api._out_dir)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Sair do Salvaí", lambda: api._quit()),
+        )
+        self.icon = pystray.Icon("salvai", Image.open(icon_path()), APP_NAME, menu)
+        self.icon.run_detached()
+
+    def notify(self, title: str, message: str):
+        if self.icon:
+            try:
+                self.icon.notify(message, title)
+            except Exception:
+                pass
+
+    def refresh(self):
+        if self.icon:
+            try:
+                self.icon.title = f"{APP_NAME} · {self.api._downloads_label()}"
+                self.icon.update_menu()
+            except Exception:
+                pass
+
+    def stop(self):
+        if self.icon:
+            icon, self.icon = self.icon, None
+            try:
+                icon.stop()
+            except Exception:
+                pass
+
+
+class DualStackServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except OSError:
+            pass
+        super().server_bind()
+
+
+class PhoneServer:
+    def __init__(self, api: "Api"):
+        self.api, self.server, self.token, self.devices = api, None, "", {}
+        self.network, self.network_at, self.network_lock = None, 0.0, threading.Lock()
+
+    def refresh_network(self):
+        with self.network_lock:
+            if self.network and time.time() - self.network_at < 60:
+                return
+            self.network, self.network_at = home_network(), time.time()
+
+    def client_allowed(self, address: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(address.split("%")[0])
+        except ValueError:
+            return False
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if ip.is_loopback or ip.is_link_local:
+            return True
+        if ip.version == 4:
+            return ip.is_private
+        networks = (self.network or {}).get("v6_networks") or []
+        return any(ip in ipaddress.ip_network(n) for n in networks)
+
+    def addresses(self) -> list[str]:
+        port = self.server.server_address[1]
+        net = self.network or {}
+        ipv4 = net.get("ipv4") or [lan_ip()]
+        urls = [f"http://{a}:{port}/?k={self.token}" for a in ipv4]
+        urls += [f"http://[{a}]:{port}/?k={self.token}" for a in net.get("ipv6") or []]
+        return urls
+
+    @property
+    def running(self) -> bool:
+        return self.server is not None
+
+    def start(self):
+        if self.server:
+            return
+        phone = self
+        self.token = secrets.token_urlsafe(12)
+        self.devices = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _json(self, code: int, payload, cookie: str | None = None):
+                body = json.dumps(payload, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _allowed(self, query: dict) -> bool:
+                if not phone.client_allowed(self.client_address[0]):
+                    return False
+                cookie = re.search(r"salvai=([\w-]+)", self.headers.get("Cookie") or "")
+                given = query.get("k") or (cookie.group(1) if cookie else "")
+                return secrets.compare_digest(given, phone.token)
+
+            def _handle(self, method: str):
+                url = urllib.parse.urlparse(self.path)
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+                if not self._allowed(query):
+                    return self._json(403, {"error": "Abra pelo QR code que aparece no Salvaí do computador."})
+                phone.devices[self.client_address[0]] = {
+                    "name": device_name(self.headers.get("User-Agent")),
+                    "seen": time.time(),
+                }
+                try:
+                    phone.route(self, method, url.path, query)
+                except (ConnectionError, BrokenPipeError):
+                    pass
+                except (KeyError, ValueError) as e:
+                    self._json(400, {"error": str(e)})
+                except Exception as e:
+                    self._json(500, {"error": clean_error(e)})
+
+            def do_GET(self):
+                self._handle("GET")
+
+            def do_POST(self):
+                self._handle("POST")
+
+            def do_HEAD(self):
+                self._handle("HEAD")
+
+        self.server = None
+        for server_class, host in ((DualStackServer, "::"), (ThreadingHTTPServer, "0.0.0.0")):
+            for port in (PHONE_PORT, 0):
+                try:
+                    self.server = server_class((host, port), Handler)
+                    break
+                except OSError:
+                    continue
+            if self.server:
+                break
+        if not self.server:
+            raise RuntimeError("não foi possível abrir o acesso na rede")
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(target=self.refresh_network, daemon=True).start()
+
+    def stop(self):
+        if self.server:
+            server, self.server = self.server, None
+            threading.Thread(target=server.shutdown, daemon=True).start()
+            server.server_close()
+
+    def route(self, h, method: str, path: str, query: dict):
+        api = self.api
+        if method == "GET" and path == "/":
+            page = (BASE / "ui" / "mobile" / "index.html").read_bytes()
+            h.send_response(200)
+            h.send_header("Content-Type", "text/html; charset=utf-8")
+            h.send_header("Content-Length", str(len(page)))
+            h.send_header("Cache-Control", "no-store")
+            if query.get("k"):
+                h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            h.end_headers()
+            h.wfile.write(page)
+            return
+        if method in ("GET", "HEAD") and path in ("/mobile.css", "/mobile.js"):
+            return send_file(h, BASE / "ui" / "mobile" / path.lstrip("/"), as_attachment=False, head=method == "HEAD")
+        if method == "GET" and path == "/api/state":
+            downloads = [dict(api._report(i), thumb=i.get("thumb")) for i in api._ordered()]
+            return h._json(200, {"version": APP_VERSION, "computer": socket.gethostname(), "downloads": downloads})
+        if method == "POST" and path == "/api/add":
+            length = int(h.headers.get("Content-Length") or 0)
+            body = json.loads(h.rfile.read(length) or b"{}")
+            fmt, quality = normalize_request(body.get("format", "mp4"), body.get("quality", "max"))
+            items = api._enqueue(body["url"], fmt, quality, source="phone")
+            if not items:
+                raise ValueError("Isso não parece um link.")
+            return h._json(200, {"queued": len(items)})
+        if method == "GET" and path == "/api/files":
+            return h._json(200, {"files": api._phone_files()})
+        if method in ("GET", "HEAD") and path == "/api/file":
+            base = Path(api._out_dir).resolve()
+            target = (base / query["path"]).resolve()
+            if base not in target.parents or not target.is_file():
+                raise ValueError("Arquivo não encontrado.")
+            return send_file(h, target, as_attachment=query.get("dl") == "1", head=method == "HEAD")
+        h._json(404, {"error": "não encontrado"})
+
+    def status(self) -> dict:
+        if not self.server:
+            return {"on": False}
+        if not self.network or time.time() - self.network_at > 60:
+            threading.Thread(target=self.refresh_network, daemon=True).start()
+        urls = self.addresses()
+        now = time.time()
+        devices = sorted({d["name"] for d in self.devices.values() if now - d["seen"] < 20})
+        qr = segno.make(urls[0], error="m").svg_inline(scale=5, border=2, dark="#111114", light="#ffffff")
+        net = self.network or {}
+        return {
+            "on": True,
+            "url": urls[0],
+            "others": urls[1:],
+            "qr": qr,
+            "network": {
+                "ready": self.network is not None,
+                "kind": net.get("kind"),
+                "name": net.get("name"),
+                "public": net.get("public", False),
+            },
+            "port": self.server.server_address[1],
+            "devices": devices,
+        }
+
+
+def parse_sums(text: str) -> dict[str, str]:
+    sums = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            sums[parts[-1].lstrip("*")] = parts[0].lower()
+    return sums
+
+
+def download(url: str, progress=None) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"Salvai/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        chunks, received = [], 0
+        while chunk := r.read(1 << 18):
+            chunks.append(chunk)
+            received += len(chunk)
+            if progress and total:
+                progress(received / total)
+    return b"".join(chunks)
+
+
+def swap_files(staged: list[tuple[Path, Path]]) -> None:
+    done = []
+    try:
+        for new_file, dest in staged:
+            old = dest.with_name(f"{dest.stem}.old{dest.suffix}")
+            if old.exists():
+                old.unlink()
+            if dest.exists():
+                dest.replace(old)
+            shutil.move(str(new_file), str(dest))
+            done.append((dest, old))
+    except Exception:
+        for dest, old in reversed(done):
+            try:
+                if dest.exists():
+                    dest.unlink()
+                old.replace(dest)
+            except OSError:
+                pass
+        raise
+
+
+def install_release(release: dict, current_exe: Path, staging: Path, progress=None) -> str:
+    version = release["tag_name"].lstrip("v")
+    assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
+    if "Salvai.exe" not in assets or "SHA256SUMS.txt" not in assets:
+        raise RuntimeError("essa versão ainda não tem os arquivos publicados")
+    sums = parse_sums(download(assets["SHA256SUMS.txt"]).decode())
+    targets = [("Salvai.exe", current_exe)]
+    mcp = current_exe.with_name("salvai-mcp.exe")
+    if mcp.exists() and "salvai-mcp.exe" in assets:
+        targets.append(("salvai-mcp.exe", mcp))
+    staging.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for index, (name, dest) in enumerate(targets):
+        data = download(assets[name], lambda f, i=index: progress and progress((i + f) / len(targets)))
+        if hashlib.sha256(data).hexdigest() != sums.get(name):
+            raise RuntimeError(f"o arquivo {name} baixado não confere com o oficial")
+        file = staging / name
+        file.write_bytes(data)
+        staged.append((file, dest))
+    swap_files(staged)
+    return version
+
+
+def cleanup_old_versions() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    folder = Path(sys.executable).resolve().parent
+    for old in folder.glob("*.old.exe"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    shutil.rmtree(CONFIG_PATH.parent / "update", ignore_errors=True)
+
+
 def dir_size(path: Path) -> int:
     total = 0
     for root, _, files in os.walk(path):
@@ -855,6 +1308,10 @@ class Api:
         self._ffmpeg = ffmpeg_dir()
         self._ready = False
         self._login_windows: dict[str, object] = {}
+        self._phone = PhoneServer(self)
+        self._tray = Tray(self)
+        self._hidden = False
+        self._quitting = False
         self._items: dict[str, dict] = {}
         self._order: list[str] = []
         self._cv = threading.Condition()
@@ -875,6 +1332,10 @@ class Api:
         splash_close()
         center_window(find_own_window(APP_NAME))
         self._window.show()
+        try:
+            self._tray.start()
+        except Exception:
+            pass
         threading.Thread(target=self._check_updates, daemon=True).start()
 
     def _watch_login(self, site: str, win, state: dict):
@@ -912,7 +1373,69 @@ class Api:
         except Exception:
             pass
 
+    def _active_count(self) -> int:
+        return sum(1 for it in self._items.values() if it["status"] in ACTIVE_STATUSES)
+
+    def _downloads_label(self) -> str:
+        n = self._active_count()
+        if not n:
+            return "Nenhum download em andamento"
+        return "1 download em andamento" if n == 1 else f"{n} downloads em andamento"
+
+    def _on_closing(self):
+        if self._quitting:
+            return True
+        busy = self._active_count()
+        if self._tray.icon is None or (not busy and not self._phone.running):
+            return True
+        threading.Thread(target=self._hide_to_tray, args=(busy,), daemon=True).start()
+        return False
+
+    def _hide_to_tray(self, busy: int):
+        self._window.hide()
+        self._hidden = True
+        reasons = []
+        if busy:
+            reasons.append(
+                "ainda há 1 download em andamento" if busy == 1 else f"ainda há {busy} downloads em andamento"
+            )
+        if self._phone.running:
+            reasons.append("o modo celular está ligado")
+        self._tray.refresh()
+        self._tray.notify(
+            "O Salvaí continua aberto aqui",
+            f"Ele foi para a bandeja porque {' e '.join(reasons)}. "
+            "Clique no ícone para voltar ou use o botão direito para sair.",
+        )
+
+    def _show_from_tray(self):
+        self._hidden = False
+        self._window.show()
+        self._window.restore()
+        hwnd = find_own_window(APP_NAME)
+        if hwnd:
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+
+    def _toggle_phone_from_tray(self):
+        if self._phone.running:
+            self._phone.stop()
+        else:
+            self._phone.start()
+        try:
+            self._window.run_js("window.app && app.phoneChanged && app.phoneChanged()")
+        except Exception:
+            pass
+        self._tray.refresh()
+
+    def _quit(self):
+        self._quitting = True
+        self._phone.stop()
+        self._tray.stop()
+        self._window.destroy()
+
     def _on_main_closed(self):
+        self._tray.stop()
+        self._phone.stop()
         for win in list(self._login_windows.values()):
             try:
                 win.destroy()
@@ -1002,6 +1525,7 @@ class Api:
             "id": it["id"],
             "url": it["url"],
             "title": it["title"],
+            "source": it.get("source"),
             "site": it.get("site"),
             "format": it["fmt"],
             "quality": it["quality"],
@@ -1012,6 +1536,58 @@ class Api:
             "error": it.get("error"),
             "needs_login": it.get("login_site"),
         }
+
+    def _phone_files(self) -> list[dict]:
+        base = Path(self._out_dir)
+        found = []
+        for dirpath, dirs, files in os.walk(base):
+            if len(Path(dirpath).relative_to(base).parts) >= 3:
+                dirs[:] = []
+            for name in files:
+                p = Path(dirpath) / name
+                if p.suffix.lower() in MEDIA_EXTENSIONS:
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    found.append((st.st_mtime, p, st.st_size))
+        found.sort(reverse=True)
+        return [
+            {
+                "path": str(p.relative_to(base)).replace("\\", "/"),
+                "name": p.name,
+                "folder": str(p.parent.relative_to(base)).replace("\\", "/") if p.parent != base else "",
+                "size_mb": round(size / 1048576, 1),
+                "kind": "audio" if p.suffix.lower() in {".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac"} else "video",
+            }
+            for _, p, size in found[:80]
+        ]
+
+    def phone_start(self) -> dict:
+        self._phone.start()
+        self._tray.refresh()
+        return self._phone.status()
+
+    def phone_stop(self) -> dict:
+        self._phone.stop()
+        self._tray.refresh()
+        return self._phone.status()
+
+    def phone_status(self) -> dict:
+        return self._phone.status()
+
+    def phone_allow_firewall(self) -> bool:
+        port = self._phone.server.server_address[1] if self._phone.server else PHONE_PORT
+        args = (
+            f'advfirewall firewall add rule name="Salvaí (celular)" dir=in action=allow protocol=TCP '
+            f"localport={port} profile=private,public"
+        )
+        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)
+        return result > 32
+
+    def open_network_settings(self):
+        kind = (self._phone.network or {}).get("kind")
+        os.startfile("ms-settings:network-wifi" if kind == "wifi" else "ms-settings:network-ethernet")
 
     def _search(self, query: str, limit: int = 5, site: str = "youtube") -> dict:
         prefix = {"youtube": "ytsearch", "soundcloud": "scsearch"}.get(site, "ytsearch")
@@ -1343,6 +1919,38 @@ class Api:
         except Exception as e:
             return {"ok": False, "message": f"Não foi possível atualizar agora: {clean_error(e)}"}
 
+    def update_app(self) -> dict:
+        release = None
+        try:
+            if not getattr(sys, "frozen", False):
+                return {"ok": False, "message": "A atualização automática funciona no app instalado (Salvai.exe)."}
+            release = github_latest(APP_REPO)
+            last = [0.0]
+
+            def progress(fraction: float):
+                now = time.monotonic()
+                if now - last[0] > 0.15 or fraction >= 1:
+                    last[0] = now
+                    try:
+                        self._window.run_js(f"window.app && app.otaProgress({round(fraction * 100)})")
+                    except Exception:
+                        pass
+
+            version = install_release(release, Path(sys.executable).resolve(), CONFIG_PATH.parent / "update", progress)
+            return {"ok": True, "version": version}
+        except PermissionError:
+            return {
+                "ok": False,
+                "message": "Sem permissão para trocar o app nesta pasta. Baixe a nova versão pela página da release.",
+                "url": (release or {}).get("html_url"),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "message": f"Não foi possível atualizar agora: {clean_error(e)}",
+                "url": (release or {}).get("html_url"),
+            }
+
     def restart_app(self):
         if getattr(sys, "frozen", False):
             args = [sys.executable]
@@ -1409,6 +2017,16 @@ class Api:
 
     def _public(self, item: dict) -> dict:
         return {k: v for k, v in item.items() if not k.startswith("_")}
+
+    def _announce(self, item: dict):
+        self._tray.refresh()
+        if not self._hidden:
+            return
+        title = item.get("title") or item["url"]
+        if item["status"] == "done":
+            self._tray.notify("Salvo! ✓", f"{title} · {item['fmt']}")
+        elif item["status"] == "error":
+            self._tray.notify("Não deu para baixar", f"{title}: {item.get('error') or ''}")
 
     def _push(self, item: dict):
         if self._window and item["id"] in self._items:
@@ -1541,6 +2159,7 @@ class Api:
                     login_site=login_site_for(item["url"]) if kind in ("login", "noaccess") else None,
                 )
         self._push(item)
+        self._announce(item)
 
 
 def selftest(out_dir: str):
@@ -1560,6 +2179,7 @@ def main():
     if "--selftest" in sys.argv:
         splash_close()
         return selftest(sys.argv[sys.argv.index("--selftest") + 1])
+    cleanup_old_versions()
     if WEBVIEW_CLEAR_FLAG.exists():
         remove_tree(WEBVIEW_DIR)
         WEBVIEW_CLEAR_FLAG.unlink(missing_ok=True)
@@ -1578,6 +2198,7 @@ def main():
     api._window = window
     window.events.shown += api._on_shown
     window.events.closed += api._on_main_closed
+    window.events.closing += api._on_closing
     bridge = Bridge(api)
     try:
         bridge.start()
@@ -1585,6 +2206,10 @@ def main():
     except Exception:
         pass
     webview.start(api._on_gui_started, debug="--debug" in sys.argv, private_mode=False, storage_path=str(WEBVIEW_DIR))
+    api._tray.stop()
+    api._phone.stop()
+    bridge.stop()
+    os._exit(0)
 
 
 if __name__ == "__main__":

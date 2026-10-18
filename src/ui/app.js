@@ -523,6 +523,8 @@ function update(it) {
       `<span class="tag-folder" title="Salvo em ${escapeHtml(it.folder)}"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>${escapeHtml(it.folder.split("/").pop())}</span>`,
     );
   if (it.source === "claude") tags.push(`<span class="tag-claude" title="Download pedido pelo Claude">✦ Claude</span>`);
+  if (it.source === "phone")
+    tags.push(`<span class="tag-phone" title="Download pedido pelo celular">📱 Celular</span>`);
   el.querySelector(".card-tags").innerHTML = tags.join("");
   el.querySelector(".overlay span").textContent =
     it.status === "paused"
@@ -988,8 +990,37 @@ const notices = (() => {
       action.textContent = "Atualizar";
     } else {
       title.textContent = `Salvaí ${current.latest} disponível`;
-      desc.textContent = `Você está na versão ${current.current}. Veja o que mudou e baixe a nova versão.`;
-      action.textContent = "Ver novidades";
+      desc.innerHTML = `Você está na versão ${escapeHtml(current.current)}. A atualização leva menos de um minuto · <a href="#" class="notice-link">ver novidades</a>`;
+      desc.querySelector(".notice-link").addEventListener("click", (e) => {
+        e.preventDefault();
+        api().open_release(current.url);
+      });
+      action.textContent = "Atualizar agora";
+    }
+  }
+
+  async function updateApp() {
+    action.disabled = true;
+    action.innerHTML = '<span class="spin"></span> Baixando 0%';
+    later.hidden = true;
+    const result = await api().update_app();
+    if (result.ok) {
+      current.stage = "ready";
+      title.textContent = `Salvaí ${result.version} instalado`;
+      desc.textContent = "Reabrindo o app na versão nova…";
+      action.innerHTML = '<span class="spin"></span> Reiniciando';
+      setTimeout(() => api().restart_app(), 1200);
+      return;
+    }
+    action.disabled = false;
+    later.hidden = false;
+    desc.textContent = result.message;
+    if (result.url) {
+      current.url = result.url;
+      current.stage = "manual";
+      action.textContent = "Abrir página";
+    } else {
+      action.textContent = "Tentar de novo";
     }
   }
 
@@ -1022,9 +1053,11 @@ const notices = (() => {
   }
 
   action.addEventListener("click", () => {
-    if (current.kind === "app") {
+    if (current.kind === "app" && current.stage === "manual") {
       api().open_release(current.url);
       next();
+    } else if (current.kind === "app") {
+      updateApp();
     } else if (current.stage === "ready") {
       api().restart_app();
     } else {
@@ -1044,3 +1077,99 @@ const notices = (() => {
   };
 })();
 window.app.updateAvailable = (notice) => notices.add(notice);
+window.app.otaProgress = (pct) => {
+  const action = $("#notice-action");
+  if (action.disabled)
+    action.innerHTML = `<span class="spin"></span> ${pct < 100 ? `Baixando ${pct}%` : "Instalando…"}`;
+};
+
+const phone = (() => {
+  const modal = $("#phone-modal");
+  const sw = $("#phone-switch");
+  let timer = null;
+  let lastFocus = null;
+  let state = { on: false };
+
+  function render() {
+    sw.classList.toggle("on", state.on);
+    $("#phone-btn").classList.toggle("on", state.on);
+    $("#phone-on").classList.toggle("show", state.on);
+    $("#phone-switch-hint").textContent = state.on
+      ? "Ligado. Aponte a câmera do celular para o código."
+      : "Desligado. Ligue para mostrar o QR code.";
+    if (!state.on) return;
+    if ($("#phone-qr").dataset.url !== state.url) {
+      $("#phone-qr").innerHTML = state.qr;
+      $("#phone-qr").dataset.url = state.url;
+    }
+    $("#phone-url").textContent = state.url;
+    const net = state.network || {};
+    let text = "Conecte o celular ao mesmo Wi-Fi do computador";
+    if (net.kind === "wifi" && net.name) text = `Conecte o celular ao Wi-Fi «${net.name}», o mesmo do computador`;
+    if (net.kind === "cabo") text = "O computador está no cabo: conecte o celular ao Wi-Fi do mesmo roteador";
+    $("#net-text").textContent = text;
+    $("#phone-warn").classList.toggle("show", !!net.public);
+    $("#phone-devices").innerHTML = state.devices.length
+      ? state.devices.map((d) => `<span class="device">● ${escapeHtml(d)} conectado</span>`).join("")
+      : '<span class="waiting">Nenhum celular conectado ainda</span>';
+    const others = state.others || [];
+    $("#phone-others").classList.toggle("has", others.length > 0);
+    $("#phone-others-list").innerHTML = others.map((u) => `<li>${escapeHtml(u)}</li>`).join("");
+  }
+
+  async function poll() {
+    state = await api().phone_status();
+    render();
+  }
+
+  function open() {
+    lastFocus = document.activeElement;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    poll();
+    clearInterval(timer);
+    timer = setInterval(poll, 2000);
+  }
+
+  function close() {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    clearInterval(timer);
+    lastFocus?.focus();
+  }
+
+  sw.addEventListener("click", async (e) => {
+    e.preventDefault();
+    sw.classList.add("busy");
+    state = state.on ? await api().phone_stop() : await api().phone_start();
+    sw.classList.remove("busy");
+    render();
+  });
+  $("#phone-copy").addEventListener("click", async (e) => {
+    await navigator.clipboard.writeText(state.url);
+    e.currentTarget.textContent = "Copiado!";
+    setTimeout(() => (e.currentTarget.textContent = "Copiar"), 1500);
+  });
+  $("#phone-firewall").addEventListener("click", () => api().phone_allow_firewall());
+  $("#phone-settings").addEventListener("click", () => api().open_network_settings());
+  $("#phone-btn").addEventListener("click", open);
+  modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && modal.classList.contains("open")) {
+        e.stopPropagation();
+        close();
+      }
+    },
+    true,
+  );
+
+  return {
+    async sync() {
+      state = await api().phone_status();
+      render();
+    },
+  };
+})();
+window.app.phoneChanged = () => phone.sync();

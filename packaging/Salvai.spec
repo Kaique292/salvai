@@ -32,13 +32,16 @@ if not ff_zip.exists() or zipfile.ZipFile(ff_zip).namelist() != [ff_src.name]:
 
 datas = [(str(ROOT / "src" / "ui"), "ui"), (str(ff_zip), "."), (str(ROOT / "version.txt"), ".")]
 datas += copy_metadata("yt-dlp")
+datas.append((str(ROOT / "assets" / "icon.ico"), "."))
 binaries, hiddenimports = [], []
 d, b, h = collect_all("yt_dlp_ejs")
 datas += d
 binaries += b
 hiddenimports += h
 
-a = Analysis([str(ROOT / "src" / "app.py")], datas=datas, binaries=binaries, hiddenimports=hiddenimports)
+a = Analysis(
+    [str(ROOT / "src" / "app.py")], datas=datas, binaries=binaries, hiddenimports=hiddenimports + ["pystray._win32"]
+)
 a.datas = [e for e in a.datas if not e[0].startswith("imageio_ffmpeg\\binaries")]
 a.binaries = [e for e in a.binaries if not e[0].startswith("imageio_ffmpeg\\binaries")]
 

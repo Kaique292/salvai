@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e0e11" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)" />
+    <title>Salvaí</title>
+    <link rel="stylesheet" href="/mobile.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="logo">
+        <svg viewBox="0 0 24 24"><path d="M12 5v9.5M7.8 10.3 12 14.5l4.2-4.2M6.5 18.5h11" /></svg>
+      </div>
+      <div class="brand">
+        <strong>Salvaí</strong>
+        <span class="link-state" id="link-state"><i></i><b id="computer">Conectando…</b></span>
+      </div>
+    </header>
+
+    <div class="wifi">
+      <svg viewBox="0 0 24 24">
+        <path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0" />
+        <circle cx="12" cy="20" r="1" />
+      </svg>
+      <span>Funciona enquanto o celular estiver <b>no mesmo Wi-Fi do computador</b> e o Salvaí estiver aberto lá.</span>
+    </div>
+
+    <div class="offline" id="offline">
+      <strong>Sem conexão com o computador</strong>
+      <span>Confira se o celular está no mesmo Wi-Fi do computador e se o modo celular continua ligado no Salvaí.</span>
+    </div>
+
+    <section class="card">
+      <h2>Baixar no computador</h2>
+      <form id="add-form">
+        <input
+          id="url"
+          type="url"
+          inputmode="url"
+          autocomplete="off"
+          placeholder="Cole aqui o link do vídeo ou música"
+          required
+        />
+        <div class="row">
+          <div class="segmented" id="format" data-value="MP4">
+            <span class="thumb"></span>
+            <button type="button" data-value="MP4" class="active">MP4</button>
+            <button type="button" data-value="MP3">MP3</button>
+          </div>
+          <select id="quality" aria-label="Qualidade"></select>
+        </div>
+        <button class="primary" type="submit" id="add-btn">
+          <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
+          Baixar no PC
+        </button>
+        <p class="form-msg" id="form-msg"></p>
+      </form>
+    </section>
+
+    <nav class="tabs">
+      <button class="active" data-tab="downloads">Downloads</button>
+      <button data-tab="files">Arquivos no PC</button>
+    </nav>
+
+    <section class="list" id="downloads"></section>
+    <section class="list" id="files" hidden></section>
+
+    <p class="ios-tip" id="ios-tip">
+      No iPhone, o arquivo vai para o app <b>Arquivos → Downloads</b>. Para colocar na galeria, abra o vídeo e toque em
+      <b>Compartilhar → Salvar vídeo</b>.
+    </p>
+
+    <script src="/mobile.js"></script>
+  </body>
+</html>

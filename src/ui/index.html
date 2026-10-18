@@ -16,6 +16,13 @@
           <h1>Salvaí <span class="version" id="version"></span></h1>
           <p>Viu, gostou, salvaí. Vídeos e músicas do YouTube, Instagram, TikTok, X e muito mais.</p>
         </div>
+        <button id="phone-btn" class="icon-btn" title="Salvaí no celular">
+          <svg viewBox="0 0 24 24">
+            <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+            <path d="M11 18.5h2" />
+          </svg>
+          <span class="live-dot"></span>
+        </button>
         <button id="accounts-btn" class="icon-btn" title="Contas conectadas">
           <svg viewBox="0 0 24 24">
             <circle cx="12" cy="8" r="4" />
@@ -263,6 +270,85 @@
         <button data-value="MP3">MP3</button>
       </div>
       <div class="cfg-list"></div>
+    </div>
+
+    <div class="modal" id="phone-modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel phone-panel" role="dialog" aria-modal="true" aria-labelledby="phone-title">
+        <div class="modal-head">
+          <div class="modal-icon">
+            <svg viewBox="0 0 24 24">
+              <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+              <path d="M11 18.5h2" />
+            </svg>
+          </div>
+          <div class="modal-titles">
+            <h3 id="phone-title">Salvaí no celular</h3>
+            <p>Peça downloads pelo celular e salve os arquivos direto nele, sem cabo e sem instalar nada.</p>
+          </div>
+          <button class="modal-close" data-close title="Fechar (Esc)">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+
+        <label class="phone-switch" id="phone-switch">
+          <span class="phone-switch-text">
+            <strong>Modo celular</strong>
+            <small id="phone-switch-hint">Desligado. Ligue para mostrar o QR code.</small>
+          </span>
+          <span class="switch"><span></span></span>
+        </label>
+
+        <div class="phone-on" id="phone-on">
+          <div class="phone-grid">
+            <div class="qr" id="phone-qr"></div>
+            <ol class="phone-steps">
+              <li>
+                <span class="net-badge" id="net-badge">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0" />
+                    <circle cx="12" cy="20" r="1" />
+                  </svg>
+                  <span id="net-text">Conecte o celular ao mesmo Wi-Fi do computador</span>
+                </span>
+              </li>
+              <li>Abra a câmera do celular e aponte para o código</li>
+              <li>Toque no link: cole vídeos para baixar no PC ou salve os arquivos no celular</li>
+            </ol>
+          </div>
+
+          <div class="phone-devices" id="phone-devices"></div>
+
+          <div class="phone-warn" id="phone-warn">
+            <strong>O Windows marcou esta rede como Pública</strong>
+            <span
+              >Nesse modo o firewall costuma bloquear o celular. Marque a rede como Privada ou libere o Salvaí no
+              firewall (o Windows vai pedir confirmação).</span
+            >
+            <div class="phone-warn-actions">
+              <button class="ghost" id="phone-settings">Abrir configurações de rede</button>
+              <button class="acc-btn primary-soft" id="phone-firewall">Liberar no firewall</button>
+            </div>
+          </div>
+
+          <div class="phone-url">
+            <code id="phone-url"></code>
+            <button class="ghost" id="phone-copy">Copiar</button>
+          </div>
+          <details class="phone-others" id="phone-others">
+            <summary>Outros endereços (IPv4/IPv6)</summary>
+            <ul id="phone-others-list"></ul>
+          </details>
+        </div>
+
+        <p class="st-safe">
+          <svg viewBox="0 0 24 24">
+            <rect x="5" y="11" width="14" height="9" rx="2" />
+            <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+          </svg>
+          Só aparelhos da sua rede com o código do QR conseguem entrar. O código muda toda vez que você liga.
+        </p>
+      </div>
     </div>
 
     <div class="modal" id="accounts-modal" aria-hidden="true">
