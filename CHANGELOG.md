@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/Kaique292/salvai/compare/v1.0.0...v1.1.0) (2026-10-18)
+
+
+### ✨ Novidades
+
+* baixa e conecta o conector do Claude automaticamente ([2c3386d](https://github.com/Kaique292/salvai/commit/2c3386de39a8dc93b4676681bca2658a6e0afb48))
+
+
+### 📝 Documentação
+
+* explica a conexão automática com o Claude ([82dd8a1](https://github.com/Kaique292/salvai/commit/82dd8a11909189e2681181429ae9f8a375874bc8))
+
 ## 1.0.0 (2026-10-18)
 
 ### ✨ Novidades
