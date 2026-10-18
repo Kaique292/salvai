@@ -1,0 +1,29 @@
+name: 🐛 Algo deu errado
+description: Um download falhou, o app travou ou algo não funcionou como deveria.
+labels: [bug]
+body:
+  - type: textarea
+    id: o-que-aconteceu
+    attributes:
+      label: O que aconteceu?
+      description: Conte o que você fez e o que apareceu na tela.
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Link que deu problema (se tiver)
+      placeholder: https://...
+  - type: dropdown
+    id: formato
+    attributes:
+      label: Formato
+      options: [MP4, MP3, Não se aplica]
+  - type: input
+    id: versao
+    attributes:
+      label: Versão do Salvaí
+      description: Aparece ao lado do nome, no topo do app.
+      placeholder: v1.0.0
+    validations:
+      required: true
