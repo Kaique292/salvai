@@ -19,3 +19,17 @@
 - Bandeja do sistema: ao fechar com downloads em andamento ou com o modo celular ligado, o app continua rodando e avisa com uma notificação
 - Atualização automática do app e do motor de download direto pelo app, com verificação SHA-256
 - Executável único para Windows, sem precisar instalar nada
+
+### 🔒 Segurança
+
+- Modo celular protegido: só aceita aparelhos da rede local com o código do QR, bloqueia tentativas repetidas e desliga sozinho após 30 minutos sem uso
+- Proteção contra sites maliciosos acessando o app pelo navegador (DNS rebinding, CSRF e acesso à rede interna)
+- Portas locais exclusivas, sem que outro programa possa ocupar a mesma porta
+- Contas criptografadas pelo Windows e atualizações conferidas pelo SHA-256 oficial
+
+### ⚡ Desempenho
+
+- Abertura mais rápida e executável menor
+- Downloads com fragmentos em paralelo e pré-visualização de links em cache
+- Modo celular só transfere o que mudou
+- Limpeza automática das sobras de aberturas fechadas à força
