@@ -2,7 +2,10 @@ import copy
 import ctypes
 import email.utils
 import functools
+import hashlib
 import http.cookiejar
+import importlib.metadata
+import io
 import json
 import os
 import re
@@ -50,6 +53,34 @@ splash_step(68, "Carregando a interface…")
 import webview
 
 splash_step(76, "Carregando o motor de download…")
+
+ENGINE_DIR = Path(os.getenv("APPDATA", Path.home())) / "Salvai" / "engine"
+
+
+def version_key(version: str) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", version or "0"))
+
+
+def bundled_engine_version() -> str:
+    try:
+        return importlib.metadata.version("yt-dlp")
+    except Exception:
+        return "0"
+
+
+def activate_engine_update() -> str | None:
+    bundled = version_key(bundled_engine_version())
+    candidates = sorted(
+        ((version_key(p.stem.removeprefix("yt-dlp-")), p) for p in ENGINE_DIR.glob("yt-dlp-*.zip")), reverse=True
+    )
+    for key, path in candidates:
+        if key > bundled:
+            sys.path.insert(0, str(path))
+            return path.stem.removeprefix("yt-dlp-")
+    return None
+
+
+ENGINE_OVERRIDE = activate_engine_update()
 import yt_dlp
 
 APP_NAME = "Salvaí"
@@ -562,6 +593,20 @@ class Bridge:
         raise KeyError(f"rota desconhecida: {method} {path}")
 
 
+APP_REPO = "Kaique292/salvai"
+ENGINE_RELEASES = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
+
+
+def http_get(url: str, timeout: float = 60) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"Salvai/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def github_latest(repo: str) -> dict:
+    return json.loads(http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=10))
+
+
 def dir_size(path: Path) -> int:
     total = 0
     for root, _, files in os.walk(path):
@@ -830,6 +875,7 @@ class Api:
         splash_close()
         center_window(find_own_window(APP_NAME))
         self._window.show()
+        threading.Thread(target=self._check_updates, daemon=True).start()
 
     def _watch_login(self, site: str, win, state: dict):
         cfg, connected = LOGIN_SITES[site], False
@@ -881,6 +927,7 @@ class Api:
         return {
             "theme": self._theme,
             "version": APP_VERSION,
+            "engine_version": yt_dlp.version.__version__,
             "out_dir": self._out_dir,
             "items": [self._public(i) for i in self._ordered()],
         }
@@ -1274,6 +1321,67 @@ class Api:
                 notes.append("O restante do cache da interface será apagado na próxima vez que o app abrir.")
         return {"freed": freed, "notes": notes, "info": self.storage_info()}
 
+    def update_engine(self) -> dict:
+        try:
+            sums = http_get(ENGINE_RELEASES + "SHA2-256SUMS").decode()
+            expected = next(line.split()[0] for line in sums.splitlines() if line.split()[-1:] == ["yt-dlp"])
+            data = http_get(ENGINE_RELEASES + "yt-dlp", timeout=180)
+            if hashlib.sha256(data).hexdigest() != expected.lower():
+                return {"ok": False, "message": "O arquivo baixado não confere com o oficial. Nada foi alterado."}
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                version = re.search(r"__version__ = ['\"]([\d.]+)['\"]", z.read("yt_dlp/version.py").decode()).group(1)
+            ENGINE_DIR.mkdir(parents=True, exist_ok=True)
+            target = ENGINE_DIR / f"yt-dlp-{version}.zip"
+            target.write_bytes(data)
+            for old in ENGINE_DIR.glob("yt-dlp-*.zip"):
+                if old != target:
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+            return {"ok": True, "version": version}
+        except Exception as e:
+            return {"ok": False, "message": f"Não foi possível atualizar agora: {clean_error(e)}"}
+
+    def restart_app(self):
+        if getattr(sys, "frozen", False):
+            args = [sys.executable]
+        else:
+            args = [sys.executable, str(Path(__file__).resolve())]
+        subprocess.Popen(args, close_fds=True, creationflags=0x00000008)
+        threading.Timer(0.3, self._window.destroy).start()
+
+    def skip_update(self, kind: str, version: str):
+        self._cfg[f"skip_{kind}"] = version
+        save_config(self._cfg)
+
+    def open_release(self, url: str):
+        if url.startswith(f"https://github.com/{APP_REPO}/"):
+            os.startfile(url)
+
+    def _check_updates(self):
+        time.sleep(3)
+        notices = []
+        try:
+            latest = github_latest("yt-dlp/yt-dlp")["tag_name"]
+            current = yt_dlp.version.__version__
+            if version_key(latest) > version_key(current) and self._cfg.get("skip_engine") != latest:
+                notices.append({"kind": "engine", "current": current, "latest": latest})
+        except Exception:
+            pass
+        try:
+            release = github_latest(APP_REPO)
+            latest = release["tag_name"].lstrip("v")
+            if version_key(latest) > version_key(APP_VERSION) and self._cfg.get("skip_app") != latest:
+                notices.append({"kind": "app", "current": APP_VERSION, "latest": latest, "url": release["html_url"]})
+        except Exception:
+            pass
+        for notice in notices:
+            try:
+                self._window.run_js(f"window.app && app.updateAvailable({json.dumps(notice)})")
+            except Exception:
+                pass
+
     def paste(self) -> str:
         try:
             return read_clipboard()
@@ -1436,7 +1544,7 @@ class Api:
 
 
 def selftest(out_dir: str):
-    lines = [f"runtime {ensure_js_runtime()}"]
+    lines = [f"runtime {ensure_js_runtime()}", f"engine {bundled_engine_version()} override {ENGINE_OVERRIDE}"]
     for fmt in ("MP4", "MP3"):
         try:
             opts = build_options(fmt, "Máxima", out_dir, ffmpeg_dir())

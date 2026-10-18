@@ -3,7 +3,7 @@ from pathlib import Path
 
 import imageio_ffmpeg
 from PyInstaller.building import splash, splash_templates
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 from PyInstaller.utils.win32.versioninfo import (FixedFileInfo, StringFileInfo, StringStruct, StringTable,
                                                  VarFileInfo, VarStruct, VSVersionInfo)
 ROOT = Path(SPECPATH).resolve().parent
@@ -31,6 +31,7 @@ if not ff_zip.exists() or zipfile.ZipFile(ff_zip).namelist() != [ff_src.name]:
         z.write(ff_src, ff_src.name)
 
 datas = [(str(ROOT / "src" / "ui"), "ui"), (str(ff_zip), "."), (str(ROOT / "version.txt"), ".")]
+datas += copy_metadata("yt-dlp")
 binaries, hiddenimports = [], []
 d, b, h = collect_all("yt_dlp_ejs")
 datas += d

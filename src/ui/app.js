@@ -578,7 +578,7 @@ window.addEventListener("pywebviewready", async () => {
   const state = await api().init();
   document.documentElement.dataset.theme = state.theme;
   $("#version").textContent = `v${state.version}`;
-  $("#st-version").textContent = `Salvaí · versão ${state.version}`;
+  $("#st-version").textContent = `Salvaí ${state.version} · motor ${state.engine_version}`;
   await api().ready();
   setTimeout(() => document.body.classList.add("ready"), 30);
   $("#folder-path").textContent = state.out_dir;
@@ -968,3 +968,79 @@ function escapeHtml(s) {
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
   );
 }
+
+const notices = (() => {
+  const el = $("#notice");
+  const title = $("#notice-title");
+  const desc = $("#notice-desc");
+  const action = $("#notice-action");
+  const later = $("#notice-later");
+  const queue = [];
+  let current = null;
+
+  function render() {
+    later.hidden = false;
+    later.textContent = "Depois";
+    action.disabled = false;
+    if (current.kind === "engine") {
+      title.textContent = "Motor de download novo disponível";
+      desc.textContent = `Os sites mudam o tempo todo: a versão ${current.latest} mantém os downloads funcionando (você está na ${current.current}).`;
+      action.textContent = "Atualizar";
+    } else {
+      title.textContent = `Salvaí ${current.latest} disponível`;
+      desc.textContent = `Você está na versão ${current.current}. Veja o que mudou e baixe a nova versão.`;
+      action.textContent = "Ver novidades";
+    }
+  }
+
+  function next() {
+    current = queue.shift() || null;
+    if (!current) {
+      el.classList.remove("show");
+      return;
+    }
+    render();
+    el.classList.add("show");
+  }
+
+  async function updateEngine() {
+    action.disabled = true;
+    action.innerHTML = '<span class="spin"></span> Atualizando…';
+    later.hidden = true;
+    const result = await api().update_engine();
+    action.disabled = false;
+    later.hidden = false;
+    if (result.ok) {
+      current.stage = "ready";
+      title.textContent = `Motor ${result.version} pronto`;
+      desc.textContent = "Reinicie o Salvaí para começar a usar. Se houver downloads em andamento, espere terminarem.";
+      action.textContent = "Reiniciar agora";
+    } else {
+      desc.textContent = result.message;
+      action.textContent = "Tentar de novo";
+    }
+  }
+
+  action.addEventListener("click", () => {
+    if (current.kind === "app") {
+      api().open_release(current.url);
+      next();
+    } else if (current.stage === "ready") {
+      api().restart_app();
+    } else {
+      updateEngine();
+    }
+  });
+  later.addEventListener("click", () => {
+    if (current.stage !== "ready") api().skip_update(current.kind, current.latest);
+    next();
+  });
+
+  return {
+    add(notice) {
+      queue.push(notice);
+      if (!current) next();
+    },
+  };
+})();
+window.app.updateAvailable = (notice) => notices.add(notice);

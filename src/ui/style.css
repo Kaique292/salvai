@@ -1898,3 +1898,64 @@ kbd {
   background: rgb(217 119 87 / 0.14);
   color: #d97757;
 }
+
+.notice {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.4s var(--ease),
+    opacity 0.3s ease;
+}
+.notice.show {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.notice-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.notice-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 12px 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(142 78 198 / 0.35);
+  background: linear-gradient(90deg, rgb(229 72 77 / 0.1), rgb(142 78 198 / 0.12));
+}
+.notice-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #fff;
+  background: linear-gradient(135deg, #f2545b, #8e4ec6);
+}
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.notice-text span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.notice-card .acc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.notice-card .acc-btn .spin {
+  border-color: rgb(255 255 255 / 0.35);
+  border-top-color: #fff;
+}
+.notice-card button[hidden] {
+  display: none;
+}
