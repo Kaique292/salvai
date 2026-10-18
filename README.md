@@ -172,6 +172,15 @@ Qualquer app que aceite servidores MCP locais (stdio) funciona: aponte o comando
 
 Se o Salvaí estiver fechado, o conector abre o app sozinho. A comunicação acontece só dentro do seu PC (`127.0.0.1`), protegida por um token que muda a cada abertura. O Claude nunca recebe suas senhas e não consegue apagar nem sair da sua pasta de downloads.
 
+## 🔄 Atualizações
+
+Ao abrir, o Salvaí confere se há novidades:
+
+- **Motor de download** — os sites mudam o tempo todo, então o motor (yt-dlp) é atualizado direto pelo app: aparece um aviso com **Atualizar**, o app baixa a versão oficial, confere a assinatura SHA-256 e pede para reiniciar. Não precisa baixar o app de novo.
+- **Nova versão do Salvaí** — aparece um aviso com **Ver novidades**, que abre a página da release para você baixar.
+
+Clicou em **Depois**? O aviso daquela versão não aparece mais; uma versão mais nova avisa de novo.
+
 ## 🧹 Armazenamento
 
 No ícone de banco de dados você vê quanto o app ocupa e o que é cada parte: cache da interface, dados do YouTube, sobras de aberturas que foram fechadas à força e componentes (ffmpeg e Deno). Marque o que quiser e limpe — **suas configurações e os vídeos baixados nunca são apagados**.

@@ -15,4 +15,5 @@
 - Tema claro e escuro com transição animada
 - Tela de carregamento animada com as etapas de abertura
 - Conector MCP para o Claude buscar, baixar e organizar vídeos e músicas em pastas
+- Aviso de novas versões e atualização do motor de download direto pelo app, com verificação SHA-256
 - Executável único para Windows, sem precisar instalar nada
