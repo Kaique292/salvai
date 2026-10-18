@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/Kaique292/salvai/compare/v1.2.2...v1.3.0) (2026-10-18)
+
+
+### ✨ Novidades
+
+* mostra o que muda entre a versão atual e a nova no aviso de atualização ([f1c089f](https://github.com/Kaique292/salvai/commit/f1c089f22e69e8ce611bfa558392aa1d75b2a2ce))
+* mostra os aparelhos conectados e permite desconectar cada um ([08a8a84](https://github.com/Kaique292/salvai/commit/08a8a846f819bd84cba24cc1635f2d769bfb85c0))
+* procura atualizações toda vez que o app abre e pelo botão Procurar atualizações ([f1c089f](https://github.com/Kaique292/salvai/commit/f1c089f22e69e8ce611bfa558392aa1d75b2a2ce))
+
+
+### 📝 Documentação
+
+* explica a aba de aparelhos conectados ([61d6516](https://github.com/Kaique292/salvai/commit/61d651675a6fa9023e2ec0c30432a3bfc23a9dac))
+
 ## [1.2.2](https://github.com/Kaique292/salvai/compare/v1.2.1...v1.2.2) (2026-10-18)
 
 
