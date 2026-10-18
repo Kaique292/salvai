@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/Kaique292/salvai/releases/latest"><img alt="Versão" src="https://img.shields.io/github/v/release/Kaique292/salvai?label=vers%C3%A3o&color=E5484D"></a>
   <a href="https://github.com/Kaique292/salvai/actions/workflows/ci.yml"><img alt="Verificação" src="https://img.shields.io/github/actions/workflow/status/Kaique292/salvai/ci.yml?branch=main&label=verifica%C3%A7%C3%A3o"></a>
+  <a href="https://github.com/Kaique292/salvai/actions/workflows/ci.yml"><img alt="Cobertura de testes" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FKaique292%2Fsalvai%2Fmain%2Fdocs%2Fbadges%2Fcoverage.json"></a>
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white">
   <a href="https://www.conventionalcommits.org/pt-br/"><img alt="Commits semânticos" src="https://img.shields.io/badge/commits-sem%C3%A2nticos-8E4EC6"></a>
@@ -211,7 +212,9 @@ Clicou em **Depois**? O aviso daquela versão não aparece mais; uma versão mai
 
 ## 🧹 Armazenamento
 
-No ícone de banco de dados você vê quanto o app ocupa e o que é cada parte: cache da interface, dados do YouTube, sobras de aberturas que foram fechadas à força e componentes (ffmpeg e Deno). Marque o que quiser e limpe — **suas configurações e os vídeos baixados nunca são apagados**.
+No ícone de banco de dados você vê quanto o app ocupa e o que é cada parte: cache da interface, dados do YouTube, sobras de aberturas que foram fechadas à força e componentes baixados (Deno e atualizações do motor). Marque o que quiser e limpe — **suas configurações e os vídeos baixados nunca são apagados**.
+
+Os vídeos não passam pelo cache: vão direto para a pasta escolhida, e os pedaços temporários do download são apagados assim que o arquivo fica pronto. As sobras de aberturas fechadas à força são limpas sozinhas na próxima abertura. Os ~90 MB que sempre ficam são o **ffmpeg**, essencial para juntar vídeo e áudio e converter para MP3 — por isso ele aparece travado na lista.
 
 ## ❓ Perguntas frequentes
 
@@ -249,12 +252,14 @@ corepack enable
 yarn install
 ```
 
-| Comando       | O que faz                                                 |
-| ------------- | --------------------------------------------------------- |
-| `yarn dev`    | Abre o app a partir do código                             |
-| `yarn build`  | Gera `dist\Salvai.exe`, `dist\salvai-mcp.exe` e os hashes |
-| `yarn lint`   | Confere formatação e qualidade (Prettier + Ruff)          |
-| `yarn format` | Formata tudo                                              |
+| Comando               | O que faz                                                 |
+| --------------------- | --------------------------------------------------------- |
+| `yarn dev`            | Abre o app a partir do código                             |
+| `yarn build`          | Gera `dist\Salvai.exe`, `dist\salvai-mcp.exe` e os hashes |
+| `yarn lint`           | Confere formatação e qualidade (Prettier + Ruff)          |
+| `yarn format`         | Formata tudo                                              |
+| `yarn test`           | Roda todos os testes (Python e interface) com cobertura   |
+| `yarn coverage:badge` | Atualiza o badge de cobertura depois dos testes           |
 
 ### Estrutura
 
@@ -265,7 +270,8 @@ salvai/
 │  ├─ salvai_mcp.py     conector MCP
 │  └─ ui/               interface (HTML, CSS e JavaScript)
 ├─ assets/              ícone, logo e tela de carregamento
-├─ scripts/             geração da arte e build
+├─ tests/              testes do app (pytest) e da interface (vitest)
+├─ scripts/             geração da arte, build e badge de cobertura
 ├─ packaging/           configuração do PyInstaller
 ├─ docs/images/         imagens deste README
 └─ .github/             verificação, releases e modelos de issue
