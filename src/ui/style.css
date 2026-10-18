@@ -2068,6 +2068,10 @@ kbd {
 .qr svg {
   width: 100%;
   height: 100%;
+  stroke-width: 1;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  shape-rendering: crispEdges;
 }
 .phone-steps {
   margin: 0;

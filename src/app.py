@@ -963,7 +963,7 @@ class PhoneServer:
         urls = self.addresses()
         now = time.time()
         devices = sorted({d["name"] for d in self.devices.values() if now - d["seen"] < 20})
-        qr = segno.make(urls[0], error="m").svg_inline(scale=5, border=2, dark="#111114", light="#ffffff")
+        qr = segno.make(urls[0], error="m").svg_inline(border=2, dark="#111114", light="#ffffff", omitsize=True)
         net = self.network or {}
         return {
             "on": True,
