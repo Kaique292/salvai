@@ -20,7 +20,7 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -34,11 +34,11 @@ jobs:
       TAG: ${{ needs.release-please.outputs.tag_name || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ env.TAG }}
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.14"
           cache: pip
