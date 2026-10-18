@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.1](https://github.com/Kaique292/salvai/compare/v1.2.0...v1.2.1) (2026-10-18)
+
+
+### 🐛 Correções
+
+* reabre a versão nova de verdade depois de atualizar ([f5b0999](https://github.com/Kaique292/salvai/commit/f5b09997c9526bd689eb3ed18e99d8500044fd79))
+
+
+### 📝 Documentação
+
+* adiciona a licença MIT ([29fff6e](https://github.com/Kaique292/salvai/commit/29fff6e7af9b56f967847fdfb4610443e0f19cc9))
+* adiciona a verificação do Google Search Console ([0d80f9a](https://github.com/Kaique292/salvai/commit/0d80f9a51188afa70cf8007c9c4d909edb482571))
+* melhora a busca do projeto no Google e no GitHub ([c3aae84](https://github.com/Kaique292/salvai/commit/c3aae841bdb55bb2fafa15dab04b84d8164a326d))
+
 ## [1.2.0](https://github.com/Kaique292/salvai/compare/v1.1.0...v1.2.0) (2026-10-18)
 
 
