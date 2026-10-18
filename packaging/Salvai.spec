@@ -40,7 +40,21 @@ binaries += b
 hiddenimports += h
 
 a = Analysis(
-    [str(ROOT / "src" / "app.py")], datas=datas, binaries=binaries, hiddenimports=hiddenimports + ["pystray._win32"]
+    [str(ROOT / "src" / "app.py")],
+    datas=datas,
+    binaries=binaries,
+    hiddenimports=hiddenimports + ["pystray._win32"],
+    excludes=[
+        "cryptography",
+        "secretstorage",
+        "tkinter",
+        "PIL._avif",
+        "PIL.AvifImagePlugin",
+        "PIL._webp",
+        "PIL.WebPImagePlugin",
+        "PIL.ImageTk",
+        "PIL._imagingtk",
+    ],
 )
 a.datas = [e for e in a.datas if not e[0].startswith("imageio_ffmpeg\\binaries")]
 a.binaries = [e for e in a.binaries if not e[0].startswith("imageio_ffmpeg\\binaries")]

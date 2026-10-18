@@ -45,7 +45,7 @@ function setOnline(ok, computer) {
 }
 
 async function api(path, options) {
-  const res = await fetch(path, { cache: "no-store", ...options });
+  const res = await fetch(path, { cache: "no-cache", ...options });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Algo deu errado");
   return data;
@@ -110,16 +110,35 @@ function renderFiles(files) {
     .join("");
 }
 
+let timer = null;
+let busy = false;
+
+function schedule(active) {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, document.hidden ? 15000 : active ? 1500 : 5000);
+}
+
 async function refresh() {
+  if (busy) return;
+  busy = true;
+  let active = false;
   try {
     const state = await api("/api/state");
     setOnline(true, state.computer);
     renderDownloads(state.downloads);
+    active = state.downloads.some((d) => !["done", "error"].includes(d.status));
     if (tab === "files") renderFiles((await api("/api/files")).files);
   } catch {
     setOnline(false);
+  } finally {
+    busy = false;
+    schedule(active);
   }
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
 
 $("#add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -156,4 +175,3 @@ document.querySelectorAll(".tabs button").forEach((b) =>
 
 if (/iPhone|iPad/.test(navigator.userAgent)) $("#ios-tip").classList.add("show");
 refresh();
-setInterval(refresh, 2000);

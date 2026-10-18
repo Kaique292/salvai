@@ -88,7 +88,24 @@ def activate_engine_update() -> str | None:
 
 
 ENGINE_OVERRIDE = activate_engine_update()
-import yt_dlp
+_engine_ready = threading.Event()
+yt_dlp = None
+
+
+def _load_engine():
+    global yt_dlp
+    import yt_dlp as module
+
+    yt_dlp = module
+    _engine_ready.set()
+
+
+def engine():
+    _engine_ready.wait()
+    return yt_dlp
+
+
+threading.Thread(target=_load_engine, daemon=True).start()
 
 APP_NAME = "Salvaí"
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -209,8 +226,13 @@ def ffmpeg_dir() -> str:
     return str(BIN_DIR)
 
 
+@functools.lru_cache(maxsize=1)
+def system_runtimes() -> tuple[str, ...]:
+    return tuple(n for n in ("deno", "node", "bun") if shutil.which(n))
+
+
 def js_runtimes() -> dict:
-    found = {} if os.getenv("YTD_FORCE_DENO") else {n: {} for n in ("deno", "node", "bun") if shutil.which(n)}
+    found = {} if os.getenv("YTD_FORCE_DENO") else {n: {} for n in system_runtimes()}
     local = BIN_DIR / "deno.exe"
     if not found and local.exists():
         found["deno"] = {"path": str(local)}
@@ -290,7 +312,7 @@ def site_label(info: dict | None, url: str) -> str:
 
 @functools.lru_cache(maxsize=512)
 def supported_site(url: str) -> bool:
-    for ie in yt_dlp.extractor.gen_extractor_classes():
+    for ie in engine().extractor.gen_extractor_classes():
         if ie.ie_key() != "Generic" and ie.suitable(url):
             return True
     return False
@@ -344,7 +366,7 @@ def save_sessions(sessions: dict) -> None:
 
 
 def make_ydl(opts: dict) -> "yt_dlp.YoutubeDL":
-    ydl = yt_dlp.YoutubeDL(opts)
+    ydl = engine().YoutubeDL(opts)
     for session in load_sessions().values():
         for c in session["cookies"]:
             domain = c["domain"]
@@ -626,6 +648,9 @@ def github_latest(repo: str) -> dict:
 
 
 PHONE_PORT = 47800
+PEEK_TTL = 15 * 60
+UPDATE_CHECK_INTERVAL = 6 * 3600
+NETWORK_TTL = 5 * 60
 MEDIA_EXTENSIONS = {".mp4", ".mp3", ".m4a", ".webm", ".mkv", ".mov", ".opus", ".ogg", ".wav", ".flac", ".jpg", ".png"}
 CREATE_NO_WINDOW = 0x08000000
 
@@ -794,6 +819,12 @@ def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, 
     size = stat.st_size
     etag = f'"{size:x}-{int(stat.st_mtime):x}"'
     start, end, status = 0, size - 1, 200
+    if not handler.headers.get("Range") and handler.headers.get("If-None-Match") == etag:
+        handler.send_response(304)
+        handler.send_header("ETag", etag)
+        handler.send_header("Cache-Control", "private, no-cache")
+        handler.end_headers()
+        return
     match = re.match(r"bytes=(\d*)-(\d*)$", (handler.headers.get("Range") or "").strip())
     if_range = handler.headers.get("If-Range")
     if match and size and (not if_range or if_range == etag):
@@ -815,6 +846,7 @@ def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, 
     handler.send_header("Content-Length", str(end - start + 1))
     handler.send_header("Accept-Ranges", "bytes")
     handler.send_header("ETag", etag)
+    handler.send_header("Cache-Control", "private, no-cache")
     for name, value in SECURITY_HEADERS.items():
         handler.send_header(name, value)
     handler.send_header("Last-Modified", email.utils.formatdate(stat.st_mtime, usegmt=True))
@@ -910,6 +942,7 @@ class PhoneServer:
         self.api, self.server, self.token, self.devices = api, None, "", {}
         self.network, self.network_at, self.network_lock = None, 0.0, threading.Lock()
         self.failures: dict[str, list[float]] = {}
+        self.qr: tuple[str, str] | None = None
         self.adds: deque = deque()
         self.last_activity = 0.0
 
@@ -928,7 +961,7 @@ class PhoneServer:
 
     def refresh_network(self):
         with self.network_lock:
-            if self.network and time.time() - self.network_at < 60:
+            if self.network and time.time() - self.network_at < NETWORK_TTL:
                 return
             self.network, self.network_at = home_network(), time.time()
 
@@ -975,12 +1008,23 @@ class PhoneServer:
             def log_message(self, *args):
                 pass
 
-            def _json(self, code: int, payload):
+            def _json(self, code: int, payload, revalidate: bool = False):
                 body = json.dumps(payload, ensure_ascii=False).encode()
+                etag = f'"{hashlib.sha1(body).hexdigest()[:20]}"'
+                if revalidate and code == 200 and self.headers.get("If-None-Match") == etag:
+                    self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "private, no-cache")
+                    self.end_headers()
+                    return
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                if revalidate:
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "private, no-cache")
+                else:
+                    self.send_header("Cache-Control", "no-store")
                 for name, value in SECURITY_HEADERS.items():
                     self.send_header(name, value)
                 self.end_headers()
@@ -1081,7 +1125,8 @@ class PhoneServer:
             return send_file(h, BASE / "ui" / "mobile" / path.lstrip("/"), as_attachment=False, head=method == "HEAD")
         if method == "GET" and path == "/api/state":
             downloads = [dict(api._report(i), thumb=i.get("thumb")) for i in api._ordered()]
-            return h._json(200, {"version": APP_VERSION, "computer": socket.gethostname(), "downloads": downloads})
+            payload = {"version": APP_VERSION, "computer": socket.gethostname(), "downloads": downloads}
+            return h._json(200, payload, revalidate=True)
         if method == "POST" and path == "/api/add":
             body = read_json_body(h)
             now = time.time()
@@ -1098,7 +1143,7 @@ class PhoneServer:
                 raise ValueError("Isso não parece um link.")
             return h._json(200, {"queued": len(items)})
         if method == "GET" and path == "/api/files":
-            return h._json(200, {"files": api._phone_files()})
+            return h._json(200, {"files": api._phone_files()}, revalidate=True)
         if method in ("GET", "HEAD") and path == "/api/file":
             base = Path(api._out_dir).resolve()
             target = (base / query["path"]).resolve()
@@ -1110,12 +1155,15 @@ class PhoneServer:
     def status(self) -> dict:
         if not self.server:
             return {"on": False}
-        if not self.network or time.time() - self.network_at > 60:
+        if not self.network or time.time() - self.network_at > NETWORK_TTL:
             threading.Thread(target=self.refresh_network, daemon=True).start()
         urls = self.addresses()
         now = time.time()
         devices = sorted({d["name"] for d in self.devices.values() if now - d["seen"] < 20})
-        qr = segno.make(urls[0], error="m").svg_inline(border=2, dark="#111114", light="#ffffff", omitsize=True)
+        if not self.qr or self.qr[0] != urls[0]:
+            svg = segno.make(urls[0], error="m").svg_inline(border=2, dark="#111114", light="#ffffff", omitsize=True)
+            self.qr = (urls[0], svg)
+        qr = self.qr[1]
         net = self.network or {}
         return {
             "on": True,
@@ -1421,6 +1469,8 @@ def build_options(fmt: str, quality: str, out_dir: str, ffmpeg: str, hook=None, 
         "windowsfilenames": True,
         "overwrites": False,
         "continuedl": True,
+        "concurrent_fragment_downloads": 4,
+        "http_chunk_size": 10 * 1024 * 1024,
         "js_runtimes": js_runtimes(),
         "cachedir": str(CACHE_DIR / "yt-dlp"),
     }
@@ -1463,6 +1513,8 @@ class Api:
         self._ready = False
         self._login_windows: dict[str, object] = {}
         self._phone = PhoneServer(self)
+        self._peek_cache: dict[str, tuple[float, dict]] = {}
+        self._files_cache: tuple[float, list] | None = None
         self._tray = Tray(self)
         self._hidden = False
         self._quitting = False
@@ -1615,7 +1667,7 @@ class Api:
         return {
             "theme": self._theme,
             "version": APP_VERSION,
-            "engine_version": yt_dlp.version.__version__,
+            "engine_version": engine().version.__version__,
             "out_dir": self._out_dir,
             "items": [self._public(i) for i in self._ordered()],
         }
@@ -1678,14 +1730,14 @@ class Api:
         }
 
     def _report(self, it: dict) -> dict:
-        base = Path(self._out_dir)
         path = it.get("filepath")
-        rel = None
-        if path:
+        if path and it.get("_rel_for") != path:
             try:
-                rel = str(Path(path).resolve().relative_to(base.resolve()))
+                it["_rel"] = str(Path(path).resolve().relative_to(Path(self._out_dir).resolve()))
             except ValueError:
-                rel = path
+                it["_rel"] = path
+            it["_rel_for"] = path
+        rel = it.get("_rel") if path else None
         return {
             "id": it["id"],
             "url": it["url"],
@@ -1703,6 +1755,13 @@ class Api:
         }
 
     def _phone_files(self) -> list[dict]:
+        if self._files_cache and time.time() - self._files_cache[0] < 5:
+            return self._files_cache[1]
+        files = self._scan_media()
+        self._files_cache = (time.time(), files)
+        return files
+
+    def _scan_media(self) -> list[dict]:
         base = Path(self._out_dir)
         found = []
         for dirpath, dirs, files in os.walk(base):
@@ -1889,6 +1948,15 @@ class Api:
         return self._out_dir
 
     def peek(self, url: str):
+        cached = self._peek_cache.get(url)
+        if cached and time.time() - cached[0] < PEEK_TTL:
+            return dict(cached[1])
+        result = self._peek(url)
+        if not result.get("error"):
+            self._peek_cache[url] = (time.time(), result)
+        return result
+
+    def _peek(self, url: str):
         vid = youtube_id(url)
         if vid:
             try:
@@ -1973,7 +2041,7 @@ class Api:
     def import_browser(self, browser: str) -> dict:
         name = BROWSERS[browser][0]
         try:
-            jar = yt_dlp.cookies.extract_cookies_from_browser(browser, logger=_QuietLogger())
+            jar = engine().cookies.extract_cookies_from_browser(browser, logger=_QuietLogger())
         except Exception as e:
             low = str(e).lower()
             if "could not copy" in low or "being used" in low or "permission" in low:
@@ -2143,26 +2211,42 @@ class Api:
 
     def _check_updates(self):
         time.sleep(3)
+        cache = self._cfg.get("update_check") or {}
+        if time.time() - cache.get("at", 0) < UPDATE_CHECK_INTERVAL:
+            notices = [n for n in cache.get("notices", []) if self._still_relevant(n)]
+        else:
+            notices = self._fetch_update_notices()
+            self._cfg["update_check"] = {"at": time.time(), "notices": notices}
+            save_config(self._cfg)
+        for notice in notices:
+            if self._cfg.get(f"skip_{notice['kind']}") == notice["latest"]:
+                continue
+            try:
+                self._window.run_js(f"window.app && app.updateAvailable({json.dumps(notice)})")
+            except Exception:
+                pass
+
+    def _still_relevant(self, notice: dict) -> bool:
+        current = engine().version.__version__ if notice["kind"] == "engine" else APP_VERSION
+        return version_key(notice["latest"]) > version_key(current)
+
+    def _fetch_update_notices(self) -> list[dict]:
         notices = []
         try:
             latest = github_latest("yt-dlp/yt-dlp")["tag_name"]
-            current = yt_dlp.version.__version__
-            if version_key(latest) > version_key(current) and self._cfg.get("skip_engine") != latest:
+            current = engine().version.__version__
+            if version_key(latest) > version_key(current):
                 notices.append({"kind": "engine", "current": current, "latest": latest})
         except Exception:
             pass
         try:
             release = github_latest(APP_REPO)
             latest = release["tag_name"].lstrip("v")
-            if version_key(latest) > version_key(APP_VERSION) and self._cfg.get("skip_app") != latest:
+            if version_key(latest) > version_key(APP_VERSION):
                 notices.append({"kind": "app", "current": APP_VERSION, "latest": latest, "url": release["html_url"]})
         except Exception:
             pass
-        for notice in notices:
-            try:
-                self._window.run_js(f"window.app && app.updateAvailable({json.dumps(notice)})")
-            except Exception:
-                pass
+        return notices
 
     def paste(self) -> str:
         try:
@@ -2239,6 +2323,14 @@ class Api:
             return info
 
     def _fetch_meta(self, item: dict):
+        cached = self._peek_cache.get(item["url"])
+        if cached and not is_youtube(item["url"]):
+            info = cached[1]
+            item["title"] = info.get("title") or item["title"]
+            item["thumb"] = item["thumb"] or info.get("thumb")
+            item["site"] = info.get("site") or item["site"]
+            self._push(item)
+            return
         try:
             self._ensure_info(item)
             self._push(item)
@@ -2297,10 +2389,11 @@ class Api:
                     ensure_js_runtime()
                 except Exception as e:
                     raise RuntimeError(f"sem internet para preparar o app ({clean_error(e)})") from e
-            if not item["_info"]:
+            youtube = is_youtube(item["url"])
+            if not item["_info"] or not youtube:
                 item["status"] = "fetching"
                 self._push(item)
-            info = copy.deepcopy(self._ensure_info(item))
+            info = copy.deepcopy(self._ensure_info(item)) if youtube else None
             if item["_cancel"]:
                 raise Paused()
             item.update(status="downloading")
@@ -2309,10 +2402,12 @@ class Api:
             opts = build_options(item["fmt"], item["quality"], item["out_dir"], self._ffmpeg, hook, url=item["url"])
             opts["postprocessor_hooks"] = [pp_hook]
             with make_ydl(opts) as ydl:
-                if is_youtube(item["url"]):
+                if youtube:
                     result = ydl.process_ie_result(info, download=True)
                 else:
                     result = ydl.extract_info(item["url"], download=True)
+                    item["title"] = item["title"] or result.get("title")
+                    item["duration"] = item["duration"] or result.get("duration")
                 req = result.get("requested_downloads") or []
                 if not req and result.get("entries"):
                     entries = [e for e in result["entries"] if e]
@@ -2321,6 +2416,7 @@ class Api:
             if item["fmt"] == "MP3" and path:
                 path = os.path.splitext(path)[0] + ".mp3"
             item.update(status="done", progress=1.0, filepath=path if path and os.path.exists(path) else None)
+            self._files_cache = None
         except Exception as e:
             if item["_cancel"]:
                 item.update(status="paused", speed=None, eta=None)
@@ -2332,6 +2428,8 @@ class Api:
                     error_kind=kind,
                     login_site=login_site_for(item["url"]) if kind in ("login", "noaccess") else None,
                 )
+        if item["status"] in ("done", "error"):
+            item["_info"] = None
         self._push(item)
         self._announce(item)
 
@@ -2341,7 +2439,7 @@ def selftest(out_dir: str):
     for fmt in ("MP4", "MP3"):
         try:
             opts = build_options(fmt, "Máxima", out_dir, ffmpeg_dir())
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with engine().YoutubeDL(opts) as ydl:
                 info = ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw")
             lines.append(f"{fmt} ok {info.get('format_id')}")
         except Exception as e:
