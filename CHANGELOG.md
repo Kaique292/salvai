@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.2.0](https://github.com/Kaique292/salvai/compare/v1.1.0...v1.2.0) (2026-10-18)
+
+
+### ✨ Novidades
+
+* assiste aos vídeos e ouve as músicas direto do computador pelo celular ([5d4a790](https://github.com/Kaique292/salvai/commit/5d4a7909a92ecb8ecf26ff47f121feb3d29e8713))
+* envia o link do modo celular pelo WhatsApp com o nome do Wi-Fi ([5d4a790](https://github.com/Kaique292/salvai/commit/5d4a7909a92ecb8ecf26ff47f121feb3d29e8713))
+* tira arquivos da lista ou manda para a Lixeira do computador pelo celular, com confirmação ([5d4a790](https://github.com/Kaique292/salvai/commit/5d4a7909a92ecb8ecf26ff47f121feb3d29e8713))
+
+
+### 🐛 Correções
+
+* esconde o aviso de lista vazia da aba que não está aberta ([5d4a790](https://github.com/Kaique292/salvai/commit/5d4a7909a92ecb8ecf26ff47f121feb3d29e8713))
+* o celular mostra e abre só os arquivos baixados pelo Salvaí ([5d4a790](https://github.com/Kaique292/salvai/commit/5d4a7909a92ecb8ecf26ff47f121feb3d29e8713))
+
+
+### 📝 Documentação
+
+* explica assistir, apagar e compartilhar pelo celular ([dc99933](https://github.com/Kaique292/salvai/commit/dc99933996f2d5fdbac900b0edeb9e4c08f387cb))
+
 ## [1.1.0](https://github.com/Kaique292/salvai/compare/v1.0.0...v1.1.0) (2026-10-18)
 
 
