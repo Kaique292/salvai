@@ -8,6 +8,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white">
   <a href="https://www.conventionalcommits.org/pt-br/"><img alt="Commits semânticos" src="https://img.shields.io/badge/commits-sem%C3%A2nticos-8E4EC6"></a>
+  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
 </p>
 
 <p align="center">
@@ -38,6 +39,8 @@
 - **Mensagens claras.** Quando algo não dá certo, o app explica o porquê (perfil privado, precisa de login, conteúdo removido, site bloqueou…) e o que fazer.
 - **Armazenamento transparente.** Veja quanto espaço o app usa, o que é cada coisa e limpe o cache com um clique.
 - **Tema claro e escuro**, com uma transição suave.
+- **Salvaí no celular.** Ligue o modo celular, aponte a câmera para o QR code e peça downloads pelo celular — depois salve os arquivos direto nele. Download interrompido continua de onde parou.
+- **Continua trabalhando na bandeja.** Fechou a janela com downloads em andamento ou com o modo celular ligado? O Salvaí vai para a bandeja, avisa com uma notificação e segue trabalhando.
 - **Funciona com o Claude.** Peça para o Claude buscar e baixar vídeos e músicas por você, já organizados em pastas.
 
 ## 📸 Telas
@@ -111,6 +114,31 @@ No app, clique no ícone de pessoa → **Contas** → **Entrar**. Abre a página
 - Já está logado no navegador? Dá para **importar** de lá (funciona melhor com o navegador fechado).
 - Use com moderação: baixar muita coisa de uma vez pode fazer o site pedir uma verificação na sua conta.
 
+## 📱 Salvaí no celular
+
+> [!IMPORTANT]
+> **O celular precisa estar no mesmo Wi-Fi do computador.** Se o computador estiver no cabo, conecte o celular ao Wi-Fi do mesmo roteador.
+
+1. No app, toque no ícone de celular e ligue o **Modo celular**.
+2. Aponte a câmera do celular para o **QR code**.
+3. Pronto: cole links para baixar no PC, acompanhe o progresso e toque em **Salvar** para levar o arquivo para o celular.
+
+- Não precisa instalar nada no celular — abre no navegador (Android e iPhone).
+- Se o download para o celular for interrompido (o Wi-Fi caiu, a tela bloqueou…), ele **continua de onde parou**.
+- No iPhone, os arquivos vão para **Arquivos → Downloads**; para colocar na galeria, abra o vídeo e toque em **Compartilhar → Salvar vídeo**.
+- Funciona com cabo ou Wi-Fi no computador, em redes IPv4 e IPv6.
+- **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga.
+
+<details>
+<summary><b>O celular não conecta?</b></summary>
+
+- Confira se o celular está no **mesmo Wi-Fi** (e não nos dados móveis).
+- Na primeira vez, o Windows pergunta se o Salvaí pode usar a rede: permita.
+- Se o Windows marcou sua rede como **Pública**, o app avisa e oferece dois caminhos: marcar a rede como **Privada** (Configurações → Rede e Internet) ou o botão **Liberar no firewall**.
+- Redes de visitantes de alguns roteadores isolam os aparelhos entre si; nesse caso use a rede principal.
+
+</details>
+
 ## 🤖 Usando com o Claude
 
 O Salvaí vem com um conector **MCP** (`salvai-mcp.exe`) que deixa o Claude buscar, baixar e organizar vídeos e músicas para você. Exemplo:
@@ -176,8 +204,8 @@ Se o Salvaí estiver fechado, o conector abre o app sozinho. A comunicação aco
 
 Ao abrir, o Salvaí confere se há novidades:
 
-- **Motor de download** — os sites mudam o tempo todo, então o motor (yt-dlp) é atualizado direto pelo app: aparece um aviso com **Atualizar**, o app baixa a versão oficial, confere a assinatura SHA-256 e pede para reiniciar. Não precisa baixar o app de novo.
-- **Nova versão do Salvaí** — aparece um aviso com **Ver novidades**, que abre a página da release para você baixar.
+- **Nova versão do Salvaí** — aparece um aviso com **Atualizar agora**: o app baixa a versão nova da página de releases (e o conector do Claude, se você usa), confere a assinatura SHA-256, troca os arquivos e reabre sozinho. Se algo der errado no meio, a versão atual continua intacta.
+- **Motor de download** — os sites mudam o tempo todo, então o motor (yt-dlp) também é atualizado direto pelo app, sem precisar de uma versão nova do Salvaí.
 
 Clicou em **Depois**? O aviso daquela versão não aparece mais; uma versão mais nova avisa de novo.
 
@@ -258,3 +286,16 @@ As versões e o [CHANGELOG](CHANGELOG.md) são gerados pelo [release-please](htt
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) · [FFmpeg](https://ffmpeg.org/) · [pywebview](https://pywebview.flowrl.com/) · [Deno](https://deno.com/) · [SortableJS](https://sortablejs.github.io/Sortable/) · [Model Context Protocol](https://modelcontextprotocol.io/) · [PyInstaller](https://pyinstaller.org/)
 
 O FFmpeg é distribuído junto com o app sob a licença GPL; o código-fonte está disponível em [ffmpeg.org](https://ffmpeg.org/download.html).
+
+## ☕ Apoie o projeto
+
+Se o Salvaí te ajudou, considere pagar um café — isso ajuda a manter o app atualizado.
+
+<p align="center">
+  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Me pague um café" src="https://img.buymeacoffee.com/button-api/?text=Me%20pague%20um%20caf%C3%A9&emoji=%E2%98%95&slug=kaiqueamaru&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff" height="48"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Kaique292/salvai/releases/latest"><img alt="Versão" src="https://img.shields.io/github/v/release/Kaique292/salvai?label=vers%C3%A3o&color=E5484D"></a>
+  <a href="https://buymeacoffee.com/kaiqueamaru"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-apoie%20o%20projeto-FFDD00?logo=buymeacoffee&logoColor=black"></a>
+</p>

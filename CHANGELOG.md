@@ -15,5 +15,7 @@
 - Tema claro e escuro com transição animada
 - Tela de carregamento animada com as etapas de abertura
 - Conector MCP para o Claude buscar, baixar e organizar vídeos e músicas em pastas
-- Aviso de novas versões e atualização do motor de download direto pelo app, com verificação SHA-256
+- Salvaí no celular: QR code, página no navegador do celular, pedidos de download e arquivos salvos direto no celular, com retomada de downloads interrompidos
+- Bandeja do sistema: ao fechar com downloads em andamento ou com o modo celular ligado, o app continua rodando e avisa com uma notificação
+- Atualização automática do app e do motor de download direto pelo app, com verificação SHA-256
 - Executável único para Windows, sem precisar instalar nada
