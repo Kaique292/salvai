@@ -46,6 +46,7 @@ def fake_app(monkeypatch, tmp_path):
 
 def test_find_app(monkeypatch, tmp_path):
     monkeypatch.delenv("SALVAI_EXE", raising=False)
+    monkeypatch.setattr(salvai_mcp, "CONFIG_PATH", tmp_path / "config.json")
     exe = tmp_path / "Salvai.exe"
     exe.write_bytes(b"x")
     monkeypatch.setenv("SALVAI_EXE", str(exe))
@@ -178,3 +179,17 @@ def test_main_runs_server(monkeypatch):
     monkeypatch.setattr(salvai_mcp.mcp, "run", lambda: ran.append("run"))
     salvai_mcp.main()
     assert "run" in ran
+
+
+def test_find_app_uses_path_saved_by_app(monkeypatch, tmp_path):
+    monkeypatch.delenv("SALVAI_EXE", raising=False)
+    exe = tmp_path / "Downloads" / "Salvai.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"x")
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(salvai_mcp, "CONFIG_PATH", config)
+    monkeypatch.setattr(salvai_mcp.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(salvai_mcp.sys, "executable", str(tmp_path / "mcp" / "salvai-mcp.exe"))
+    assert salvai_mcp.saved_app_path() is None and salvai_mcp.find_app() is None
+    config.write_text(json.dumps({"app_path": str(exe)}), encoding="utf-8")
+    assert salvai_mcp.find_app() == str(exe)

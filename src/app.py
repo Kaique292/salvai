@@ -142,6 +142,9 @@ def _migrate_old_data(old: Path, new: Path) -> None:
 
 _migrate_old_data(_APPDATA / "YouTubeDownloader", CONFIG_PATH.parent)
 BIN_DIR = CONFIG_PATH.parent / "bin"
+MCP_DIR = CONFIG_PATH.parent / "mcp"
+MCP_PATH = MCP_DIR / "salvai-mcp.exe"
+MCP_VERSION_PATH = MCP_DIR / "version.txt"
 CACHE_DIR = CONFIG_PATH.parent / "cache"
 WEBVIEW_DIR = CONFIG_PATH.parent / "webview"
 WEBVIEW_CLEAR_FLAG = CONFIG_PATH.parent / "clear-webview-cache"
@@ -1237,29 +1240,74 @@ def swap_files(staged: list[tuple[Path, Path]]) -> None:
         raise
 
 
-def install_release(release: dict, current_exe: Path, staging: Path, progress=None, trusted_prefix: str = "") -> str:
-    version = release["tag_name"].lstrip("v")
+def release_assets(release: dict, name: str, trusted_prefix: str) -> tuple[dict, dict]:
     assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
-    if trusted_prefix and any(not url.startswith(trusted_prefix) for url in assets.values()):
+    if any(not url.startswith(trusted_prefix) for url in assets.values()):
         raise RuntimeError("a release tem arquivos fora do repositório oficial")
-    if "Salvai.exe" not in assets or "SHA256SUMS.txt" not in assets:
+    if name not in assets or "SHA256SUMS.txt" not in assets:
         raise RuntimeError("essa versão ainda não tem os arquivos publicados")
-    sums = parse_sums(download(assets["SHA256SUMS.txt"]).decode())
-    targets = [("Salvai.exe", current_exe)]
-    mcp = current_exe.with_name("salvai-mcp.exe")
-    if mcp.exists() and "salvai-mcp.exe" in assets:
-        targets.append(("salvai-mcp.exe", mcp))
+    return assets, parse_sums(download(assets["SHA256SUMS.txt"]).decode())
+
+
+def fetch_verified(assets: dict, sums: dict, name: str, progress=None) -> bytes:
+    data = download(assets[name], progress)
+    if hashlib.sha256(data).hexdigest() != sums.get(name):
+        raise RuntimeError(f"o arquivo {name} baixado não confere com o oficial")
+    return data
+
+
+def install_release(release: dict, current_exe: Path, staging: Path, progress=None, trusted_prefix: str = "") -> str:
+    assets, sums = release_assets(release, "Salvai.exe", trusted_prefix)
+    data = fetch_verified(assets, sums, "Salvai.exe", progress)
     staging.mkdir(parents=True, exist_ok=True)
-    staged = []
-    for index, (name, dest) in enumerate(targets):
-        data = download(assets[name], lambda f, i=index: progress and progress((i + f) / len(targets)))
-        if hashlib.sha256(data).hexdigest() != sums.get(name):
-            raise RuntimeError(f"o arquivo {name} baixado não confere com o oficial")
-        file = staging / name
-        file.write_bytes(data)
-        staged.append((file, dest))
-    swap_files(staged)
-    return version
+    file = staging / "Salvai.exe"
+    file.write_bytes(data)
+    swap_files([(file, current_exe)])
+    return release["tag_name"].lstrip("v")
+
+
+def ensure_mcp(version: str = APP_VERSION) -> bool:
+    try:
+        (MCP_DIR / "salvai-mcp.old.exe").unlink(missing_ok=True)
+    except OSError:
+        pass
+    if MCP_PATH.exists() and MCP_VERSION_PATH.exists() and MCP_VERSION_PATH.read_text().strip() == version:
+        return False
+    release = json.loads(http_get(f"https://api.github.com/repos/{APP_REPO}/releases/tags/v{version}", timeout=10))
+    assets, sums = release_assets(release, "salvai-mcp.exe", f"https://github.com/{APP_REPO}/releases/download/")
+    data = fetch_verified(assets, sums, "salvai-mcp.exe")
+    MCP_DIR.mkdir(parents=True, exist_ok=True)
+    staged = MCP_DIR / "salvai-mcp.new.exe"
+    staged.write_bytes(data)
+    swap_files([(staged, MCP_PATH)])
+    MCP_VERSION_PATH.write_text(version)
+    return True
+
+
+def claude_config_paths() -> list[Path]:
+    roots = [Path(os.getenv("APPDATA", Path.home())) / "Claude"]
+    roots += sorted(Path(os.getenv("LOCALAPPDATA", Path.home())).glob("Packages/*Claude*/LocalCache/Roaming/Claude"))
+    return [root / "claude_desktop_config.json" for root in roots if root.is_dir()]
+
+
+def register_claude(done: list[str]) -> list[str]:
+    added = []
+    for path in claude_config_paths():
+        if str(path) in done:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            servers = data.setdefault("mcpServers", {}) if isinstance(data, dict) else None
+            if not isinstance(servers, dict):
+                raise ValueError("configuração do Claude em formato inesperado")
+            servers["salvai"] = {"command": str(MCP_PATH)}
+            temp = path.with_name(path.name + ".salvai")
+            temp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            temp.replace(path)
+        except (OSError, ValueError):
+            continue
+        added.append(str(path))
+    return added
 
 
 def cleanup_old_versions() -> None:
@@ -1371,11 +1419,11 @@ STORAGE = [
     },
     {
         "key": "essential",
-        "name": "ffmpeg (essencial)",
+        "name": "Essenciais",
         "default": False,
         "locked": True,
-        "desc": "Junta vídeo e áudio e converte para MP3. Faz parte do app e é recriado toda vez que ele abre, "
-        "por isso não pode ser removido.",
+        "desc": "O ffmpeg junta vídeo e áudio e converte para MP3, e o conector deixa o Claude usar o Salvaí. "
+        "Fazem parte do app e são recriados sozinhos, por isso não podem ser removidos.",
     },
 ]
 
@@ -1569,6 +1617,28 @@ class Api:
         except Exception:
             pass
         threading.Thread(target=self._check_updates, daemon=True).start()
+        threading.Thread(target=self._setup_mcp, daemon=True).start()
+
+    def _setup_mcp(self):
+        if not getattr(sys, "frozen", False):
+            return
+        if self._cfg.get("app_path") != sys.executable:
+            self._cfg["app_path"] = sys.executable
+            save_config(self._cfg)
+        try:
+            ensure_mcp()
+        except Exception:
+            return
+        done = self._cfg.get("claude_registered", [])
+        added = register_claude(done)
+        if not added:
+            return
+        self._cfg["claude_registered"] = done + added
+        save_config(self._cfg)
+        try:
+            self._window.run_js('window.app && app.updateAvailable({"kind": "claude"})')
+        except Exception:
+            pass
 
     def _watch_login(self, site: str, win, state: dict):
         cfg, connected = LOGIN_SITES[site], False
@@ -2114,12 +2184,13 @@ class Api:
         }
 
     def storage_info(self) -> dict:
-        essential = file_size(BIN_DIR / "ffmpeg.exe") + file_size(BIN_DIR / "ffmpeg.version")
+        ffmpeg = file_size(BIN_DIR / "ffmpeg.exe") + file_size(BIN_DIR / "ffmpeg.version")
+        essential = ffmpeg + dir_size(MCP_DIR)
         sizes = {
             "webview": dir_size(WEBVIEW_DIR),
             "ytdlp": dir_size(CACHE_DIR),
             "temp": sum(dir_size(d) for d in leftover_temp_dirs()),
-            "components": dir_size(BIN_DIR) - essential + dir_size(ENGINE_DIR),
+            "components": dir_size(BIN_DIR) - ffmpeg + dir_size(ENGINE_DIR),
             "essential": essential,
         }
         cats = [dict(c, size=sizes[c["key"]]) for c in STORAGE]

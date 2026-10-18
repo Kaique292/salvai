@@ -651,7 +651,7 @@ const storage = (() => {
       "Dados do YouTube",
       "Sobras de aberturas anteriores",
       "Componentes baixados",
-      "ffmpeg (essencial)",
+      "Essenciais",
     ]
       .map(
         (n) =>
@@ -998,7 +998,12 @@ const notices = (() => {
     later.hidden = false;
     later.textContent = "Depois";
     action.disabled = false;
-    if (current.kind === "engine") {
+    if (current.kind === "claude") {
+      title.textContent = "Salvaí conectado ao Claude";
+      desc.textContent = "Feche e abra o Claude Desktop para ele começar a buscar e baixar vídeos e músicas por aqui.";
+      action.textContent = "Entendi";
+      later.hidden = true;
+    } else if (current.kind === "engine") {
       title.textContent = "Motor de download novo disponível";
       desc.textContent = `Os sites mudam o tempo todo: a versão ${current.latest} mantém os downloads funcionando (você está na ${current.current}).`;
       action.textContent = "Atualizar";
@@ -1067,7 +1072,9 @@ const notices = (() => {
   }
 
   action.addEventListener("click", () => {
-    if (current.kind === "app" && current.stage === "manual") {
+    if (current.kind === "claude") {
+      next();
+    } else if (current.kind === "app" && current.stage === "manual") {
       api().open_release(current.url);
       next();
     } else if (current.kind === "app") {

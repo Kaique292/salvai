@@ -872,3 +872,36 @@ def test_clear_storage_skips_files_named_like_cache(api):
     result = api.clear_storage(["webview"])
     assert (app.WEBVIEW_DIR / "Default" / "Cache").exists() and app.WEBVIEW_CLEAR_FLAG.exists()
     assert result["freed"] == 0
+
+
+def test_setup_mcp_registers_once_and_notifies(api, monkeypatch, tmp_path):
+    exe = tmp_path / "Salvai.exe"
+    monkeypatch.setattr(app.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(app.sys, "executable", str(exe))
+    ensured, registered = [], []
+    monkeypatch.setattr(app, "ensure_mcp", lambda: ensured.append(1))
+    monkeypatch.setattr(app, "register_claude", lambda done: (registered.append(list(done)), ["C:/claude.json"])[1])
+    api._setup_mcp()
+    assert api._cfg["app_path"] == str(exe) and api._cfg["claude_registered"] == ["C:/claude.json"]
+    assert app.load_config()["claude_registered"] == ["C:/claude.json"]
+    assert any('"kind": "claude"' in js for js in api._window.js)
+    monkeypatch.setattr(app, "register_claude", lambda done: [])
+    api._window.js.clear()
+    api._setup_mcp()
+    assert ensured == [1, 1] and api._window.js == []
+    monkeypatch.setattr(app, "register_claude", lambda done: ["C:/outro.json"])
+    api._window.fail.add("run_js")
+    api._setup_mcp()
+    assert api._cfg["claude_registered"] == ["C:/claude.json", "C:/outro.json"]
+
+
+def test_setup_mcp_skips_when_not_installed_or_offline(api, monkeypatch):
+    called = []
+    monkeypatch.setattr(app, "register_claude", lambda done: called.append(1) or [])
+    monkeypatch.setattr(app.sys, "frozen", False, raising=False)
+    api._setup_mcp()
+    monkeypatch.setattr(app.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(app, "ensure_mcp", lambda: (_ for _ in ()).throw(OSError("sem internet")))
+    api._cfg["app_path"] = app.sys.executable
+    api._setup_mcp()
+    assert called == [] and "claude_registered" not in api._cfg
