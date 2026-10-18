@@ -1116,19 +1116,11 @@ class PhoneServer:
 
     def route(self, h, method: str, path: str, query: dict):
         api = self.api
-        if method == "GET" and path == "/" and query.get("k"):
-            h.send_response(303)
-            h.send_header("Location", "/")
-            h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
-            h.send_header("Content-Length", "0")
-            h.send_header("Cache-Control", "no-store")
-            for name, value in SECURITY_HEADERS.items():
-                h.send_header(name, value)
-            h.end_headers()
-            return
         if method == "GET" and path == "/":
             page = (BASE / "ui" / "mobile" / "index.html").read_bytes()
             h.send_response(200)
+            if query.get("k"):
+                h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
             h.send_header("Content-Type", "text/html; charset=utf-8")
             h.send_header("Content-Length", str(len(page)))
             h.send_header("Cache-Control", "no-store")
