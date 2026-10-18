@@ -55,7 +55,7 @@ const quality = (() => {
       .join("");
     const cur = options.find((o) => o[0] === value);
     root.querySelector(".dd-value").textContent = value;
-    root.querySelector(".dd-tag").textContent = cur ? cur[1] : "";
+    root.querySelector(".dd-tag").textContent = cur[1];
   };
   const open = () => {
     active = Math.max(
@@ -174,10 +174,8 @@ function shakeInput() {
 function addLinks(text) {
   const urls = findUrls(text);
   if (!urls.length) {
-    if (text.trim()) {
-      shakeInput();
-      showMsg("Isso não parece um link");
-    }
+    shakeInput();
+    showMsg("Isso não parece um link");
     return 0;
   }
   let added = 0,
@@ -377,7 +375,7 @@ $("#paste").addEventListener("click", async () => {
   if (!text) return showMsg("A área de transferência está vazia");
   if (!findUrls(text).length) {
     shakeInput();
-    return showMsg("O que está copiado não é um link do YouTube");
+    return showMsg("O que está copiado não é um link");
   }
   addLinks(text);
   input.focus();
@@ -601,7 +599,13 @@ const storage = (() => {
   const modal = $("#storage-modal"),
     listEl = $("#st-list"),
     clearBtn = $("#st-clear");
-  const COLORS = { webview: "#3E63DD", ytdlp: "#F76B15", temp: "#FFB224", components: "#8E4EC6" };
+  const COLORS = {
+    webview: "#3E63DD",
+    ytdlp: "#F76B15",
+    temp: "#FFB224",
+    components: "#8E4EC6",
+    essential: "#6B6B76",
+  };
   const check = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
   let info = null,
     shownTotal = 0,
@@ -629,12 +633,12 @@ const storage = (() => {
   }
 
   function selectedBytes() {
-    return info ? info.categories.filter((c) => selected.has(c.key)).reduce((s, c) => s + c.size, 0) : 0;
+    return info.categories.filter((c) => selected.has(c.key)).reduce((s, c) => s + c.size, 0);
   }
 
   function updateButton() {
     const bytes = selectedBytes();
-    clearBtn.disabled = !info || bytes === 0;
+    clearBtn.disabled = bytes === 0;
     clearBtn.textContent = bytes ? `Limpar selecionados · ${fmtSize(bytes)}` : "Nada para limpar";
     $("#st-bar")
       .querySelectorAll("span")
@@ -646,7 +650,8 @@ const storage = (() => {
       "Cache da interface",
       "Dados do YouTube",
       "Sobras de aberturas anteriores",
-      "Componentes do app",
+      "Componentes baixados",
+      "ffmpeg (essencial)",
     ]
       .map(
         (n) =>
@@ -666,8 +671,10 @@ const storage = (() => {
         <span class="st-name"><span class="st-dot"></span>${escapeHtml(c.name)}</span>
         <span class="st-size">${fmtSize(c.size)}</span>
         <span class="st-desc">${escapeHtml(c.desc)}</span>`;
+      if (c.locked) row.classList.add("locked");
       row.addEventListener("click", (e) => {
         e.preventDefault();
+        if (c.locked) return;
         selected.has(c.key) ? selected.delete(c.key) : selected.add(c.key);
         row.classList.toggle("checked", selected.has(c.key));
         updateButton();
@@ -1153,9 +1160,10 @@ const phone = (() => {
     render();
   });
   $("#phone-copy").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
     await navigator.clipboard.writeText(state.url);
-    e.currentTarget.textContent = "Copiado!";
-    setTimeout(() => (e.currentTarget.textContent = "Copiar"), 1500);
+    btn.textContent = "Copiado!";
+    setTimeout(() => (btn.textContent = "Copiar"), 1500);
   });
   $("#phone-firewall").addEventListener("click", () => api().phone_allow_firewall());
   $("#phone-settings").addEventListener("click", () => api().open_network_settings());

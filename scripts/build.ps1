@@ -13,7 +13,10 @@ Invoke-Step @("scripts\brand.py")
 Invoke-Step @("scripts\make_splash.py")
 Invoke-Step @("-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", "dist", "--workpath", "build\pyinstaller", "packaging\Salvai.spec")
 Invoke-Step @("-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console", "--name", "salvai-mcp",
-  "--icon", "$root\assets\icon.ico", "--distpath", "dist", "--workpath", "build\pyinstaller",
+  "--icon", "$root\assets\icon.ico", "--add-data", "$root\packaging\salvai-mcp.marker;.",
+  "--exclude-module", "PIL", "--exclude-module", "numpy", "--exclude-module", "tkinter",
+  "--exclude-module", "pytest", "--exclude-module", "_pytest", "--exclude-module", "pygments.formatters.img",
+  "--distpath", "dist", "--workpath", "build\pyinstaller",
   "--specpath", "build\pyinstaller", "src\salvai_mcp.py")
 
 Get-ChildItem dist\*.exe | ForEach-Object {

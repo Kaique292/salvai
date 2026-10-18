@@ -515,9 +515,12 @@ AUDIO_QUALITY = {"max": "Máxima", "320": "320 kbps", "256": "256 kbps", "192": 
 
 def normalize_request(fmt: str, quality: str) -> tuple[str, str]:
     fmt = "MP3" if str(fmt).strip().lower() in ("mp3", "audio", "áudio", "music", "música") else "MP4"
-    key = re.sub(r"(p|kbps|k)$", "", str(quality or "max").strip().lower().replace(" ", ""))
-    key = "max" if key in ("", "max", "máxima", "maxima", "best", "melhor") else key
     table = AUDIO_QUALITY if fmt == "MP3" else VIDEO_QUALITY
+    raw = str(quality or "max").strip().lower().replace(" ", "")
+    if raw in table:
+        return fmt, table[raw]
+    key = re.sub(r"(p|kbps|k)$", "", raw)
+    key = "max" if key in ("", "máxima", "maxima", "best", "melhor") else key
     return fmt, table.get(key, "Máxima")
 
 
@@ -578,7 +581,7 @@ class Bridge:
             def do_POST(self):
                 self._handle("POST")
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = ExclusiveHTTPServer(("127.0.0.1", 0), Handler)
         BRIDGE_PATH.write_text(
             json.dumps(
                 {"port": self.server.server_address[1], "token": self.token, "pid": os.getpid(), "version": APP_VERSION}
@@ -620,8 +623,6 @@ class Bridge:
                     }
                     for i in items
                 ]
-                if not items:
-                    created.append({"url": it["url"], "error": "isso não parece um link"})
             return {"queued": created}
         if (method, path) == ("GET", "/downloads"):
             ids = set(filter(None, query.get("ids", "").split(",")))
@@ -926,7 +927,17 @@ class Tray:
                 pass
 
 
-class DualStackServer(ThreadingHTTPServer):
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self):
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        super().server_bind()
+
+
+class DualStackServer(ExclusiveHTTPServer):
     address_family = socket.AF_INET6
 
     def server_bind(self):
@@ -1076,7 +1087,7 @@ class PhoneServer:
                 self._handle("HEAD")
 
         self.server = None
-        for server_class, host in ((DualStackServer, "::"), (ThreadingHTTPServer, "0.0.0.0")):
+        for server_class, host in ((DualStackServer, "::"), (ExclusiveHTTPServer, "0.0.0.0")):
             for port in (PHONE_PORT, 0):
                 try:
                     self.server = server_class((host, port), Handler)
@@ -1094,7 +1105,7 @@ class PhoneServer:
     def stop(self):
         if self.server:
             server, self.server = self.server, None
-            threading.Thread(target=server.shutdown, daemon=True).start()
+            server.shutdown()
             server.server_close()
 
     def route(self, h, method: str, path: str, query: dict):
@@ -1139,8 +1150,6 @@ class PhoneServer:
             validate_remote_url(url)
             fmt, quality = normalize_request(body.get("format", "mp4"), body.get("quality", "max"))
             items = api._enqueue(url, fmt, quality, source="phone")
-            if not items:
-                raise ValueError("Isso não parece um link.")
             return h._json(200, {"queued": len(items)})
         if method == "GET" and path == "/api/files":
             return h._json(200, {"files": api._phone_files()}, revalidate=True)
@@ -1210,16 +1219,19 @@ def swap_files(staged: list[tuple[Path, Path]]) -> None:
             old = dest.with_name(f"{dest.stem}.old{dest.suffix}")
             if old.exists():
                 old.unlink()
+            backup = None
             if dest.exists():
                 dest.replace(old)
+                backup = old
+            done.append((dest, backup))
             shutil.move(str(new_file), str(dest))
-            done.append((dest, old))
     except Exception:
-        for dest, old in reversed(done):
+        for dest, backup in reversed(done):
             try:
                 if dest.exists():
                     dest.unlink()
-                old.replace(dest)
+                if backup:
+                    backup.replace(dest)
             except OSError:
                 pass
         raise
@@ -1296,37 +1308,36 @@ def remove_tree(path: Path) -> int:
     return freed
 
 
+def is_salvai_temp_dir(d: Path) -> bool:
+    if (d / "salvai-mcp.marker").exists():
+        return True
+    return (d / "ffmpeg.zip").exists() and (d / "ui" / "index.html").exists()
+
+
 def leftover_temp_dirs() -> list[Path]:
     current = Path(getattr(sys, "_MEIPASS", "")).resolve() if hasattr(sys, "_MEIPASS") else None
     found = []
     for d in Path(os.getenv("TEMP", "")).glob("_MEI*"):
         try:
-            if (
-                d.is_dir()
-                and d.resolve() != current
-                and (d / "ffmpeg.zip").exists()
-                and (d / "ui" / "index.html").exists()
-            ):
+            if d.is_dir() and not d.name.endswith(".del") and d.resolve() != current and is_salvai_temp_dir(d):
                 found.append(d)
         except OSError:
             pass
     return found
 
 
-def other_instances_running() -> bool:
-    if not getattr(sys, "frozen", False):
-        return False
-    name = os.path.basename(sys.executable)
-    try:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH", "/FO", "CSV"],
-            capture_output=True,
-            text=True,
-            creationflags=0x08000000,
-        ).stdout
-        return out.lower().count(name.lower()) > 2
-    except Exception:
-        return True
+def cleanup_leftovers() -> int:
+    freed = 0
+    for d in leftover_temp_dirs():
+        trash = d.with_name(d.name + ".del")
+        try:
+            d.rename(trash)
+        except OSError:
+            continue
+        freed += remove_tree(trash)
+    for trash in Path(os.getenv("TEMP", "")).glob("_MEI*.del"):
+        freed += remove_tree(trash)
+    return freed
 
 
 STORAGE = [
@@ -1353,12 +1364,27 @@ STORAGE = [
     },
     {
         "key": "components",
-        "name": "Componentes do app",
+        "name": "Componentes baixados",
         "default": False,
-        "desc": "Programas que o app usa para juntar vídeo e áudio e converter para MP3 (ffmpeg e Deno). "
-        "Se apagar, o app prepara tudo de novo no próximo download, o que leva alguns segundos.",
+        "desc": "O Deno (motor que o YouTube exige quando o PC não tem Node.js) e as atualizações do motor de "
+        "download. Se apagar, o app baixa de novo quando precisar.",
+    },
+    {
+        "key": "essential",
+        "name": "ffmpeg (essencial)",
+        "default": False,
+        "locked": True,
+        "desc": "Junta vídeo e áudio e converte para MP3. Faz parte do app e é recriado toda vez que ele abre, "
+        "por isso não pode ser removido.",
     },
 ]
+
+
+def file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def load_config() -> dict:
@@ -2088,11 +2114,13 @@ class Api:
         }
 
     def storage_info(self) -> dict:
+        essential = file_size(BIN_DIR / "ffmpeg.exe") + file_size(BIN_DIR / "ffmpeg.version")
         sizes = {
             "webview": dir_size(WEBVIEW_DIR),
             "ytdlp": dir_size(CACHE_DIR),
             "temp": sum(dir_size(d) for d in leftover_temp_dirs()),
-            "components": dir_size(BIN_DIR),
+            "components": dir_size(BIN_DIR) - essential + dir_size(ENGINE_DIR),
+            "essential": essential,
         }
         cats = [dict(c, size=sizes[c["key"]]) for c in STORAGE]
         return {
@@ -2107,11 +2135,9 @@ class Api:
         if "ytdlp" in keys:
             freed += remove_tree(CACHE_DIR)
         if "temp" in keys:
-            if other_instances_running():
-                notes.append("As sobras não foram apagadas porque há outra janela do app aberta.")
-            else:
-                for d in leftover_temp_dirs():
-                    freed += remove_tree(d)
+            freed += cleanup_leftovers()
+            if leftover_temp_dirs():
+                notes.append("Algumas sobras estão em uso por outra janela do app e serão apagadas depois.")
         if "components" in keys:
             with self._cv:
                 busy = self._current is not None
@@ -2119,7 +2145,10 @@ class Api:
                 notes.append("Os componentes não foram apagados porque há um download em andamento.")
             else:
                 with _runtime_lock:
-                    freed += remove_tree(BIN_DIR)
+                    deno = BIN_DIR / "deno.exe"
+                    freed += file_size(deno)
+                    deno.unlink(missing_ok=True)
+                    freed += remove_tree(ENGINE_DIR)
         if "webview" in keys:
             before = dir_size(WEBVIEW_DIR)
             for sub in ("Cache", "Code Cache", "GPUCache"):
@@ -2311,7 +2340,8 @@ class Api:
             opts = build_options(item["fmt"], item["quality"], item["out_dir"], self._ffmpeg, url=item["url"])
             with make_ydl(opts) as ydl:
                 info = ydl.extract_info(item["url"], download=False, process=False)
-            item["_info"], item["_info_at"] = info, time.time()
+            if item["status"] not in ("done", "error"):
+                item["_info"], item["_info_at"] = info, time.time()
             item["title"] = info.get("title") or item["title"]
             item["duration"] = info.get("duration")
             item["site"] = site_label(info, item["url"])
@@ -2415,7 +2445,9 @@ class Api:
                 path = req[0].get("filepath") if req else ydl.prepare_filename(result)
             if item["fmt"] == "MP3" and path:
                 path = os.path.splitext(path)[0] + ".mp3"
-            item.update(status="done", progress=1.0, filepath=path if path and os.path.exists(path) else None)
+            item.update(
+                status="done", progress=1.0, filepath=path if path and os.path.exists(path) else None, _info=None
+            )
             self._files_cache = None
         except Exception as e:
             if item["_cancel"]:
@@ -2424,12 +2456,11 @@ class Api:
                 kind, msg = friendly_error(e, item["url"])
                 item.update(
                     status="error",
+                    _info=None,
                     error=msg,
                     error_kind=kind,
                     login_site=login_site_for(item["url"]) if kind in ("login", "noaccess") else None,
                 )
-        if item["status"] in ("done", "error"):
-            item["_info"] = None
         self._push(item)
         self._announce(item)
 
@@ -2452,6 +2483,7 @@ def main():
         splash_close()
         return selftest(sys.argv[sys.argv.index("--selftest") + 1])
     cleanup_old_versions()
+    threading.Thread(target=cleanup_leftovers, daemon=True).start()
     if WEBVIEW_CLEAR_FLAG.exists():
         remove_tree(WEBVIEW_DIR)
         WEBVIEW_CLEAR_FLAG.unlink(missing_ok=True)

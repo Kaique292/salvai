@@ -1,7 +1,9 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +17,20 @@ from pydantic import BaseModel, Field
 
 BRIDGE_PATH = Path(os.getenv("APPDATA", Path.home())) / "Salvai" / "bridge.json"
 DETACHED_PROCESS = 0x00000008
+
+
+def cleanup_leftovers() -> None:
+    current = Path(getattr(sys, "_MEIPASS", "")).resolve() if hasattr(sys, "_MEIPASS") else None
+    for folder in Path(os.getenv("TEMP", "")).glob("_MEI*"):
+        try:
+            if folder.resolve() == current or not (folder / "salvai-mcp.marker").exists():
+                continue
+            trash = folder.with_name(folder.name + ".del")
+            folder.rename(trash)
+            shutil.rmtree(trash, ignore_errors=True)
+        except OSError:
+            continue
+
 
 mcp = MCPServer(
     "salvai",
@@ -167,5 +183,10 @@ def move_file(path: str, folder: str) -> dict:
     return call("POST", "/move", {"path": path, "folder": folder})
 
 
-if __name__ == "__main__":
+def main():
+    threading.Thread(target=cleanup_leftovers, daemon=True).start()
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
