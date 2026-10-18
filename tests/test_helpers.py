@@ -711,8 +711,88 @@ def test_install_release(tmp_path, monkeypatch):
     (tmp_path / "salvai-mcp.exe").write_bytes(b"velho-mcp")
     progress = []
     assert app.install_release(release, current, tmp_path / "staging", progress.append) == "9.0.0"
-    assert current.read_bytes() == b"novo-app" and (tmp_path / "salvai-mcp.exe").read_bytes() == b"novo-mcp"
+    assert current.read_bytes() == b"novo-app" and (tmp_path / "salvai-mcp.exe").read_bytes() == b"velho-mcp"
     assert progress
+
+
+def mcp_release(
+    monkeypatch, data=b"conector", sums=None, prefix="https://github.com/Kaique292/salvai/releases/download/v9/"
+):
+    files = {"salvai-mcp.exe": data}
+    sums = sums if sums is not None else f"{hashlib.sha256(data).hexdigest()}  salvai-mcp.exe"
+    release, content = release_for(None, files, sums, prefix)
+    asked = []
+    monkeypatch.setattr(app, "http_get", lambda url, timeout=60: (asked.append(url), json.dumps(release).encode())[1])
+    monkeypatch.setattr(app, "download", lambda url, progress=None: content[url])
+    return asked
+
+
+def test_ensure_mcp_downloads_verifies_and_skips(monkeypatch, isolated):
+    asked = mcp_release(monkeypatch)
+    assert app.ensure_mcp("9.0.0") is True
+    assert app.MCP_PATH.read_bytes() == b"conector" and app.MCP_VERSION_PATH.read_text() == "9.0.0"
+    assert asked == ["https://api.github.com/repos/Kaique292/salvai/releases/tags/v9.0.0"]
+    assert app.ensure_mcp("9.0.0") is False and len(asked) == 1
+    (app.MCP_DIR / "salvai-mcp.old.exe").write_bytes(b"x")
+    mcp_release(monkeypatch, data=b"conector-novo")
+    assert app.ensure_mcp("9.1.0") is True
+    assert app.MCP_PATH.read_bytes() == b"conector-novo"
+    assert (app.MCP_DIR / "salvai-mcp.old.exe").read_bytes() == b"conector"
+
+
+def test_ensure_mcp_rejections(monkeypatch, isolated):
+    mcp_release(monkeypatch, sums="0" * 64 + "  salvai-mcp.exe")
+    with pytest.raises(RuntimeError, match="não confere"):
+        app.ensure_mcp("9.0.0")
+    mcp_release(monkeypatch, prefix="https://outro.site/")
+    with pytest.raises(RuntimeError, match="fora do repositório"):
+        app.ensure_mcp("9.0.0")
+    assert not app.MCP_PATH.exists()
+
+
+def test_ensure_mcp_old_file_in_use(monkeypatch, isolated):
+    mcp_release(monkeypatch)
+    app.MCP_DIR.mkdir()
+    (app.MCP_DIR / "salvai-mcp.old.exe").mkdir()
+    app.MCP_PATH.write_bytes(b"em-uso")
+    with pytest.raises(OSError):
+        app.ensure_mcp("9.0.0")
+    assert app.MCP_PATH.read_bytes() == b"em-uso"
+    (app.MCP_DIR / "salvai-mcp.old.exe").rmdir()
+    assert app.ensure_mcp("9.0.0") is True and app.MCP_PATH.read_bytes() == b"conector"
+
+
+def test_claude_config_paths(monkeypatch, tmp_path):
+    roaming, local = tmp_path / "Roaming", tmp_path / "Local"
+    monkeypatch.setenv("APPDATA", str(roaming))
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    assert app.claude_config_paths() == []
+    (roaming / "Claude").mkdir(parents=True)
+    store = local / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming" / "Claude"
+    store.mkdir(parents=True)
+    assert app.claude_config_paths() == [
+        roaming / "Claude" / "claude_desktop_config.json",
+        store / "claude_desktop_config.json",
+    ]
+
+
+def test_register_claude(monkeypatch, tmp_path, isolated):
+    fresh = tmp_path / "a" / "claude_desktop_config.json"
+    existing = tmp_path / "b" / "claude_desktop_config.json"
+    broken = tmp_path / "c" / "claude_desktop_config.json"
+    odd = tmp_path / "d" / "claude_desktop_config.json"
+    done = tmp_path / "e" / "claude_desktop_config.json"
+    for path in (fresh, existing, broken, odd, done):
+        path.parent.mkdir()
+    existing.write_text(json.dumps({"mcpServers": {"outro": {"command": "x"}}, "tema": "escuro"}), encoding="utf-8")
+    broken.write_text("{ quebrado", encoding="utf-8")
+    odd.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(app, "claude_config_paths", lambda: [fresh, existing, broken, odd, done])
+    assert app.register_claude([str(done)]) == [str(fresh), str(existing)]
+    assert json.loads(fresh.read_text(encoding="utf-8")) == {"mcpServers": {"salvai": {"command": str(app.MCP_PATH)}}}
+    merged = json.loads(existing.read_text(encoding="utf-8"))
+    assert merged["tema"] == "escuro" and set(merged["mcpServers"]) == {"outro", "salvai"}
+    assert broken.read_text(encoding="utf-8") == "{ quebrado" and not done.exists()
 
 
 def test_install_release_rejections(tmp_path, monkeypatch):

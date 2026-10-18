@@ -16,6 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
 BRIDGE_PATH = Path(os.getenv("APPDATA", Path.home())) / "Salvai" / "bridge.json"
+CONFIG_PATH = BRIDGE_PATH.with_name("config.json")
 DETACHED_PROCESS = 0x00000008
 
 
@@ -47,9 +48,17 @@ mcp = MCPServer(
 )
 
 
+def saved_app_path() -> str | None:
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("app_path")
+    except Exception:
+        return None
+
+
 def find_app() -> str | None:
     here = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
-    for candidate in (os.getenv("SALVAI_EXE"), here / "Salvai.exe", here / "dist" / "Salvai.exe"):
+    candidates = (os.getenv("SALVAI_EXE"), saved_app_path(), here / "Salvai.exe", here / "dist" / "Salvai.exe")
+    for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return str(candidate)
     return None

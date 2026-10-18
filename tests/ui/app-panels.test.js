@@ -392,6 +392,21 @@ describe("contas", () => {
 });
 
 describe("avisos de atualização", () => {
+  test("conector do Claude: avisa uma vez, esconde o Depois e fecha no Entendi", async () => {
+    const { api } = await setup();
+    const el = $("#notice");
+    const later = $("#notice-later");
+    window.app.updateAvailable({ kind: "claude" });
+    expect(el.classList.contains("show")).toBe(true);
+    expect($("#notice-title").textContent).toBe("Salvaí conectado ao Claude");
+    expect($("#notice-desc").textContent).toContain("Feche e abra o Claude Desktop");
+    expect($("#notice-action").textContent).toBe("Entendi");
+    expect(later.hidden).toBe(true);
+    $("#notice-action").click();
+    expect(el.classList.contains("show")).toBe(false);
+    expect(api.skip_update).not.toHaveBeenCalled();
+  });
+
   test("motor: falha, sucesso, reinício e fila para o próximo aviso", async () => {
     let n = 0;
     const { api } = await setup({
