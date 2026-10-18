@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import winreg
 import zipfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -142,6 +143,8 @@ def _migrate_old_data(old: Path, new: Path) -> None:
 
 _migrate_old_data(_APPDATA / "YouTubeDownloader", CONFIG_PATH.parent)
 BIN_DIR = CONFIG_PATH.parent / "bin"
+SAVED_PATH = CONFIG_PATH.parent / "saved.json"
+SAVED_LIMIT = 300
 MCP_DIR = CONFIG_PATH.parent / "mcp"
 MCP_PATH = MCP_DIR / "salvai-mcp.exe"
 MCP_VERSION_PATH = MCP_DIR / "version.txt"
@@ -1154,12 +1157,18 @@ class PhoneServer:
             fmt, quality = normalize_request(body.get("format", "mp4"), body.get("quality", "max"))
             items = api._enqueue(url, fmt, quality, source="phone")
             return h._json(200, {"queued": len(items)})
+        if method == "POST" and path == "/api/files/forget":
+            return h._json(200, {"ok": api._forget(str(read_json_body(h).get("id", "")))})
+        if method == "POST" and path == "/api/files/clear":
+            api._clear_saved()
+            return h._json(200, {"ok": True})
+        if method == "POST" and path == "/api/files/trash":
+            return h._json(200, {"trashed": api._trash(str(read_json_body(h).get("id", "")))})
         if method == "GET" and path == "/api/files":
             return h._json(200, {"files": api._phone_files()}, revalidate=True)
         if method in ("GET", "HEAD") and path == "/api/file":
-            base = Path(api._out_dir).resolve()
-            target = (base / query["path"]).resolve()
-            if base not in target.parents or not target.is_file() or target.suffix.lower() not in MEDIA_EXTENSIONS:
+            target = api._saved_file(query.get("id", ""))
+            if not target:
                 raise ValueError("Arquivo não encontrado.")
             return send_file(h, target, as_attachment=query.get("dl") == "1", head=method == "HEAD")
         h._json(404, {"error": "não encontrado"})
@@ -1191,6 +1200,61 @@ class PhoneServer:
             "port": self.server.server_address[1],
             "devices": devices,
         }
+
+
+def whatsapp_installed() -> bool:
+    try:
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "whatsapp"))
+        return True
+    except OSError:
+        return False
+
+
+def whatsapp_message(url: str, network: dict) -> str:
+    if network.get("kind") == "wifi" and network.get("name"):
+        where = f"no Wi-Fi *{network['name']}*"
+    elif network.get("kind") == "cabo":
+        where = "no Wi-Fi do mesmo roteador do computador"
+    else:
+        where = "no mesmo Wi-Fi do computador"
+    return (
+        "📲 *Salvaí no celular*\n\n"
+        "Abra este link para mandar vídeos e músicas para o computador baixar e assistir direto no celular:\n"
+        f"{url}\n\n"
+        f"⚠️ Só funciona com o celular conectado {where}.\n"
+        "O link deixa de funcionar quando o modo celular é desligado no computador."
+    )
+
+
+def file_key(path) -> str:
+    return hashlib.sha256(str(Path(path).resolve()).lower().encode()).hexdigest()[:20]
+
+
+class _FileOp(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("wFunc", ctypes.c_uint),
+        ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR),
+        ("fFlags", ctypes.c_ushort),
+        ("fAnyOperationsAborted", wintypes.BOOL),
+        ("hNameMappings", ctypes.c_void_p),
+        ("lpszProgressTitle", wintypes.LPCWSTR),
+    ]
+
+
+def send_to_trash(path: Path) -> None:
+    op = _FileOp(wFunc=3, pFrom=str(path) + "\0", fFlags=0x0040 | 0x0010 | 0x0004 | 0x0400)
+    if ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) or op.fAnyOperationsAborted or path.exists():
+        raise OSError("não foi possível mandar o arquivo para a Lixeira")
+
+
+def load_saved() -> list[str]:
+    try:
+        data = json.loads(SAVED_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
 
 
 def parse_sums(text: str) -> dict[str, str]:
@@ -1589,6 +1653,8 @@ class Api:
         self._phone = PhoneServer(self)
         self._peek_cache: dict[str, tuple[float, dict]] = {}
         self._files_cache: tuple[float, list] | None = None
+        self._saved = load_saved()
+        self._saved_lock = threading.Lock()
         self._tray = Tray(self)
         self._hidden = False
         self._quitting = False
@@ -1846,6 +1912,7 @@ class Api:
             "status": it["status"],
             "progress": round(it["progress"] * 100),
             "file": rel,
+            "file_id": file_key(path) if path else None,
             "error": it.get("error"),
             "needs_login": it.get("login_site"),
         }
@@ -1857,31 +1924,76 @@ class Api:
         self._files_cache = (time.time(), files)
         return files
 
+    def _remember(self, path: str, replaces: str | None = None):
+        path = str(Path(path).resolve())
+        with self._saved_lock:
+            if replaces is not None and replaces not in self._saved:
+                return
+            rest = [p for p in self._saved if p not in (path, replaces)]
+            self._store_saved([path, *rest][:SAVED_LIMIT])
+
+    def _store_saved(self, saved: list[str]):
+        self._saved = saved
+        SAVED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SAVED_PATH.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+        self._files_cache = None
+
+    def _forget(self, key: str) -> bool:
+        with self._saved_lock:
+            keep = [p for p in self._saved if file_key(p) != key]
+            if len(keep) == len(self._saved):
+                return False
+            self._store_saved(keep)
+        return True
+
+    def _clear_saved(self):
+        with self._saved_lock:
+            self._store_saved([])
+
+    def _trash(self, key: str) -> str:
+        target = self._saved_file(key)
+        if not target:
+            raise ValueError("Arquivo não encontrado.")
+        send_to_trash(target)
+        self._forget(key)
+        return target.name
+
+    def _saved_file(self, key: str) -> Path | None:
+        for raw in list(self._saved):
+            p = Path(raw)
+            if file_key(p) == key and p.suffix.lower() in MEDIA_EXTENSIONS and p.is_file():
+                return p
+        return None
+
     def _scan_media(self) -> list[dict]:
-        base = Path(self._out_dir)
+        base = Path(self._out_dir).resolve()
         found = []
-        for dirpath, dirs, files in os.walk(base):
-            if len(Path(dirpath).relative_to(base).parts) >= 3:
-                dirs[:] = []
-            for name in files:
-                p = Path(dirpath) / name
-                if p.suffix.lower() in MEDIA_EXTENSIONS:
-                    try:
-                        st = p.stat()
-                    except OSError:
-                        continue
-                    found.append((st.st_mtime, p, st.st_size))
-        found.sort(reverse=True)
-        return [
-            {
-                "path": str(p.relative_to(base)).replace("\\", "/"),
-                "name": p.name,
-                "folder": str(p.parent.relative_to(base)).replace("\\", "/") if p.parent != base else "",
-                "size_mb": round(size / 1048576, 1),
-                "kind": "audio" if p.suffix.lower() in {".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac"} else "video",
-            }
-            for _, p, size in found[:80]
-        ]
+        for raw in list(self._saved):
+            p = Path(raw)
+            if p.suffix.lower() not in MEDIA_EXTENSIONS:
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            try:
+                folder = p.parent.relative_to(base).as_posix()
+            except ValueError:
+                folder = p.parent.name
+            found.append(
+                {
+                    "id": file_key(p),
+                    "name": p.name,
+                    "folder": "" if folder == "." else folder,
+                    "size_mb": round(size / 1048576, 1),
+                    "kind": "audio"
+                    if p.suffix.lower() in {".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac"}
+                    else "video",
+                }
+            )
+            if len(found) == 80:
+                break
+        return found
 
     def phone_start(self) -> dict:
         self._phone.start()
@@ -1905,6 +2017,15 @@ class Api:
         )
         result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)
         return result > 32
+
+    def share_whatsapp(self) -> dict:
+        status = self._phone.status()
+        if not status.get("on"):
+            return {"ok": False}
+        text = urllib.parse.quote(whatsapp_message(status["url"], self._phone.network or {}))
+        desktop = whatsapp_installed()
+        os.startfile(f"whatsapp://send?text={text}" if desktop else f"https://web.whatsapp.com/send?text={text}")
+        return {"ok": True, "app": "desktop" if desktop else "web"}
 
     def open_network_settings(self):
         kind = (self._phone.network or {}).get("kind")
@@ -1984,6 +2105,7 @@ class Api:
             dest = dest_dir / f"{src.stem} ({n}){src.suffix}"
             n += 1
         shutil.move(str(src), str(dest))
+        self._remember(str(dest), replaces=str(src))
         for it in self._items.values():
             if it.get("filepath") and Path(it["filepath"]).resolve() == src:
                 it["filepath"] = str(dest)
@@ -2519,7 +2641,8 @@ class Api:
             item.update(
                 status="done", progress=1.0, filepath=path if path and os.path.exists(path) else None, _info=None
             )
-            self._files_cache = None
+            if item["filepath"]:
+                self._remember(item["filepath"])
         except Exception as e:
             if item["_cancel"]:
                 item.update(status="paused", speed=None, eta=None)

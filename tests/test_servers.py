@@ -153,14 +153,22 @@ def test_phone_state_add_and_files(phone, api, monkeypatch):
     )
     assert status == 200 and json_body(data) == {"queued": 1}
     assert phone_call(phone, "POST", "/api/add", {}, b'{"url": "nada"}')[0] == 400
-    Path(api._out_dir, "musica.mp3").write_bytes(b"12345")
+    music = Path(api._out_dir, "musica.mp3")
+    music.write_bytes(b"12345")
+    Path(api._out_dir, "nao-baixado.mp4").write_bytes(b"pessoal")
     Path(api._out_dir, "doc.pdf").write_bytes(b"segredo")
+    assert json_body(phone_call(phone, "GET", "/api/files")[2])["files"] == []
+    api._remember(str(music))
     status, _, data = phone_call(phone, "GET", "/api/files")
-    assert [f["name"] for f in json_body(data)["files"]] == ["musica.mp3"]
-    status, headers, data = phone_call(phone, "GET", "/api/file?path=musica.mp3&dl=1")
+    files = json_body(data)["files"]
+    assert [f["name"] for f in files] == ["musica.mp3"] and "path" not in files[0]
+    key = files[0]["id"]
+    status, headers, data = phone_call(phone, "GET", f"/api/file?id={key}&dl=1")
     assert status == 200 and data == b"12345" and "attachment" in headers["Content-Disposition"]
-    assert phone_call(phone, "HEAD", "/api/file?path=musica.mp3")[2] == b""
-    assert phone_call(phone, "GET", "/api/file?path=doc.pdf")[0] == 400
+    assert phone_call(phone, "HEAD", f"/api/file?id={key}")[2] == b""
+    other = app.file_key(Path(api._out_dir, "nao-baixado.mp4"))
+    assert phone_call(phone, "GET", f"/api/file?id={other}")[0] == 400
+    assert phone_call(phone, "GET", "/api/file?path=nao-baixado.mp4")[0] == 400
     assert phone_call(phone, "GET", "/api/file")[0] == 400
     assert phone_call(phone, "GET", "/naoexiste")[0] == 404
 
@@ -354,3 +362,24 @@ def test_tray_menu_and_lifecycle(api, monkeypatch):
     tray.refresh()
     tray.stop()
     assert tray.icon is None
+
+
+def test_phone_file_actions(phone, api, monkeypatch):
+    base = Path(api._out_dir)
+    for name in ("a.mp4", "b.mp4"):
+        (base / name).write_bytes(b"1")
+        api._remember(str(base / name))
+    post = lambda path, body: phone_call(
+        phone, "POST", path, {"Content-Type": "application/json"}, json.dumps(body).encode()
+    )
+    status, _, data = post("/api/files/forget", {"id": app.file_key(base / "a.mp4")})
+    assert status == 200 and json_body(data) == {"ok": True} and (base / "a.mp4").exists()
+    assert json_body(post("/api/files/forget", {"id": "x"})[2]) == {"ok": False}
+    monkeypatch.setattr(app, "send_to_trash", lambda path: path.unlink())
+    status, _, data = post("/api/files/trash", {"id": app.file_key(base / "b.mp4")})
+    assert status == 200 and json_body(data) == {"trashed": "b.mp4"} and not (base / "b.mp4").exists()
+    status, _, data = post("/api/files/trash", {"id": app.file_key(base / "a.mp4")})
+    assert status == 400 and "não encontrado" in json_body(data)["error"]
+    api._remember(str(base / "a.mp4"))
+    assert json_body(post("/api/files/clear", {})[2]) == {"ok": True} and api._saved == []
+    assert phone_call(phone, "POST", "/api/files/trash", {"Origin": "http://evil.com"}, b"{}")[0] == 403

@@ -608,6 +608,29 @@ describe("celular", () => {
     expect(sw.classList.contains("on")).toBe(false);
   });
 
+  test("envia o link pelo WhatsApp do computador ou da web", async () => {
+    let result = { ok: true, app: "desktop" };
+    const { api } = await setup({ phone_start: async () => phoneState(), share_whatsapp: async () => result });
+    click($("#phone-switch"));
+    await tick(0);
+    const btn = $("#phone-whatsapp");
+    click(btn);
+    await tick(0);
+    expect(api.share_whatsapp).toHaveBeenCalledTimes(1);
+    expect(btn.textContent.trim()).toBe("Abrindo…");
+    await tick(2500);
+    expect(btn.textContent.trim()).toBe("WhatsApp");
+    result = { ok: true, app: "web" };
+    click(btn);
+    await tick(0);
+    expect(btn.textContent.trim()).toBe("Abrindo no navegador…");
+    await tick(2500);
+    result = { ok: false };
+    click(btn);
+    await tick(0);
+    expect(btn.textContent.trim()).toBe("WhatsApp");
+  });
+
   test("copia o link, restaura o texto e aciona firewall e configurações", async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

@@ -1172,6 +1172,13 @@ const phone = (() => {
     btn.textContent = "Copiado!";
     setTimeout(() => (btn.textContent = "Copiar"), 1500);
   });
+  $("#phone-whatsapp").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const result = await api().share_whatsapp();
+    if (!result.ok) return;
+    btn.lastChild.textContent = result.app === "desktop" ? " Abrindo…" : " Abrindo no navegador…";
+    setTimeout(() => (btn.lastChild.textContent = " WhatsApp"), 2500);
+  });
   $("#phone-firewall").addEventListener("click", () => api().phone_allow_firewall());
   $("#phone-settings").addEventListener("click", () => api().open_network_settings());
   $("#phone-btn").addEventListener("click", open);

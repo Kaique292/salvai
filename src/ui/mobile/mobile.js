@@ -14,10 +14,13 @@ const QUALITIES = {
 };
 const $ = (s) => document.querySelector(s);
 const SAVE_ICON = '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+const MORE_ICON =
+  '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>';
 let format = "MP4";
 let tab = "downloads";
 let lastFiles = "";
 let lastDownloads = "";
+let currentFiles = [];
 const seenItems = new Set();
 
 const escapeHtml = (s) =>
@@ -25,7 +28,7 @@ const escapeHtml = (s) =>
     /[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
   );
-const fileUrl = (path, download) => `/api/file?path=${encodeURIComponent(path)}${download ? "&dl=1" : ""}`;
+const fileUrl = (id, download) => `/api/file?id=${encodeURIComponent(id)}${download ? "&dl=1" : ""}`;
 
 function setFormat(value) {
   format = value;
@@ -83,8 +86,8 @@ function renderDownloads(downloads) {
     .map((d) => {
       const thumb = d.thumb ? `<img src="${escapeHtml(d.thumb)}" alt="" />` : `<span class="icon">${SAVE_ICON}</span>`;
       const save =
-        d.status === "done" && d.file
-          ? `<a class="save" href="${fileUrl(d.file, true)}" download>${SAVE_ICON}Salvar</a>`
+        d.status === "done" && d.file_id
+          ? `<a class="save" href="${fileUrl(d.file_id, true)}" download>${SAVE_ICON}Salvar</a>`
           : "";
       const fresh = !seenItems.has(d.id);
       seenItems.add(d.id);
@@ -99,16 +102,162 @@ function renderFiles(files) {
   lastFiles = key;
   const el = $("#files");
   if (!files.length) {
-    el.innerHTML = '<div class="empty">A pasta de downloads do PC ainda está vazia.</div>';
+    el.innerHTML =
+      '<div class="empty">Nada salvo pelo Salvaí ainda. Os vídeos e músicas que ele baixar aparecem aqui.</div>';
     return;
   }
-  el.innerHTML = files
-    .map((f) => {
-      const where = [f.folder, `${f.size_mb} MB`].filter(Boolean).join(" · ");
-      return `<div class="item"><a class="icon" href="${fileUrl(f.path, false)}">${f.kind === "audio" ? "♪" : "▶"}</a><div class="meta"><strong>${escapeHtml(f.name)}</strong><small>${escapeHtml(where)}</small></div><a class="save" href="${fileUrl(f.path, true)}" download>${SAVE_ICON}Salvar</a></div>`;
-    })
-    .join("");
+  currentFiles = files;
+  const count = files.length === 1 ? "1 arquivo salvo pelo Salvaí" : `${files.length} arquivos salvos pelo Salvaí`;
+  el.innerHTML =
+    `<div class="files-head"><span>${count}</span><button type="button" class="link-btn" data-clear>Limpar lista</button></div>` +
+    files
+      .map((f) => {
+        const where = [f.folder, `${f.size_mb} MB`].filter(Boolean).join(" · ");
+        return `<div class="item"><button type="button" class="icon play" data-play="${escapeHtml(f.id)}" aria-label="Assistir no celular">${f.kind === "audio" ? "♪" : "▶"}</button><div class="meta"><strong>${escapeHtml(f.name)}</strong><small>${escapeHtml(where)}</small></div><a class="save" href="${fileUrl(f.id, true)}" download>${SAVE_ICON}Salvar</a><button type="button" class="more" data-more="${escapeHtml(f.id)}" aria-label="Mais opções">${MORE_ICON}</button></div>`;
+      })
+      .join("");
 }
+
+const sheet = (() => {
+  const root = $("#sheet");
+  let hideTimer;
+
+  function open(title, desc, actions) {
+    clearTimeout(hideTimer);
+    $("#sheet-title").textContent = title;
+    $("#sheet-desc").textContent = desc;
+    $("#sheet-actions").replaceChildren(
+      ...actions.map(({ label, danger, run }) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        if (danger) b.className = "danger";
+        b.addEventListener("click", run);
+        return b;
+      }),
+    );
+    root.hidden = false;
+    requestAnimationFrame(() => root.classList.add("show"));
+  }
+
+  function close() {
+    root.classList.remove("show");
+    hideTimer = setTimeout(() => (root.hidden = true), 250);
+  }
+
+  root.querySelector("[data-close]").addEventListener("click", close);
+  return { open, close };
+})();
+
+let toastTimer;
+function toast(text, error = false) {
+  const el = $("#toast");
+  el.textContent = text;
+  el.className = `toast show${error ? " error" : ""}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
+}
+
+async function fileAction(path, id, done) {
+  sheet.close();
+  try {
+    await api(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    toast(done);
+  } catch (err) {
+    toast(err.message, true);
+  }
+  lastFiles = "";
+  refresh();
+}
+
+function confirmTrash(file) {
+  sheet.open(
+    "Apagar do computador?",
+    `"${file.name}" vai para a Lixeira do computador. Dá para recuperar por lá se mudar de ideia.`,
+    [
+      {
+        label: "Apagar",
+        danger: true,
+        run: () => fileAction("/api/files/trash", file.id, "Arquivo enviado para a Lixeira do computador."),
+      },
+      { label: "Cancelar", run: sheet.close },
+    ],
+  );
+}
+
+const player = (() => {
+  const root = $("#player");
+  const video = $("#player-video");
+  const error = $("#player-error");
+
+  function open(file) {
+    $("#player-title").textContent = file.name;
+    error.textContent = "";
+    root.classList.toggle("audio", file.kind === "audio");
+    video.src = fileUrl(file.id, false);
+    root.hidden = false;
+    requestAnimationFrame(() => root.classList.add("show"));
+    video.play().catch(() => {});
+  }
+
+  function close() {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    root.classList.remove("show");
+    root.hidden = true;
+  }
+
+  video.addEventListener("error", () => {
+    if (!video.getAttribute("src")) return;
+    error.textContent =
+      "O navegador do celular não consegue tocar esse formato. Feche e toque em Salvar para abrir no app de vídeos.";
+  });
+  $("#player-close").addEventListener("click", close);
+  return { open, close };
+})();
+
+function fileMenu(file) {
+  sheet.open(file.name, "", [
+    {
+      label: file.kind === "audio" ? "Ouvir no celular" : "Assistir no celular",
+      run: () => {
+        sheet.close();
+        player.open(file);
+      },
+    },
+    {
+      label: "Tirar da lista",
+      run: () => fileAction("/api/files/forget", file.id, "Tirado da lista. O arquivo continua no computador."),
+    },
+    { label: "Apagar do computador", danger: true, run: () => confirmTrash(file) },
+    { label: "Cancelar", run: sheet.close },
+  ]);
+}
+
+function confirmClear() {
+  sheet.open("Limpar a lista?", "Os arquivos somem só desta lista e continuam no computador.", [
+    {
+      label: "Limpar lista",
+      danger: true,
+      run: () => fileAction("/api/files/clear", "", "Lista limpa. Os arquivos continuam no computador."),
+    },
+    { label: "Cancelar", run: sheet.close },
+  ]);
+}
+
+$("#files").addEventListener("click", (e) => {
+  if (e.target.closest("[data-clear]")) return confirmClear();
+  const target = e.target.closest("[data-more], [data-play]");
+  const file = target && currentFiles.find((f) => f.id === (target.dataset.more || target.dataset.play));
+  if (!file) return;
+  if (target.dataset.play) player.open(file);
+  else fileMenu(file);
+});
 
 let timer = null;
 let busy = false;

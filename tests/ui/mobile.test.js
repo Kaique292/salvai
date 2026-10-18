@@ -83,7 +83,7 @@ describe("lista de downloads", () => {
 
   test("renderiza cada status em ordem inversa", async () => {
     const downloads = [
-      { id: 1, url: "https://a", status: "done", format: "MP4", quality: "720", file: "C:/a b.mp4", thumb: "t.jpg" },
+      { id: 1, url: "https://a", status: "done", format: "MP4", quality: "720", file_id: "a b", thumb: "t.jpg" },
       { id: 2, title: "Erro <x>", status: "error" },
       { id: 3, title: "Baixando", status: "downloading", progress: 42 },
       { id: 4, title: "Processando", status: "processing" },
@@ -109,9 +109,7 @@ describe("lista de downloads", () => {
     expect(items[6].querySelector("strong").textContent).toBe("https://a");
     expect(items[6].querySelector("img").getAttribute("src")).toBe("t.jpg");
     expect(items[6].textContent).toContain("Pronto no PC · MP4 720");
-    expect(items[6].querySelector("a.save").getAttribute("href")).toBe(
-      `/api/file?path=${encodeURIComponent("C:/a b.mp4")}&dl=1`,
-    );
+    expect(items[6].querySelector("a.save").getAttribute("href")).toBe("/api/file?id=a%20b&dl=1");
   });
 
   test("escapa caracteres especiais e mostra o erro", async () => {
@@ -203,8 +201,8 @@ describe("agendamento", () => {
 describe("abas", () => {
   test("mostra os arquivos do PC e volta para downloads", async () => {
     const files = [
-      { name: "Música <1>", path: "C:/m.mp3", kind: "audio", folder: "Músicas", size_mb: 3.2 },
-      { name: "Vídeo", path: "C:/v.mp4", kind: "video", folder: "", size_mb: 10 },
+      { name: "Música <1>", id: "m1", kind: "audio", folder: "Músicas", size_mb: 3.2 },
+      { name: "Vídeo", id: "v1", kind: "video", folder: "", size_mb: 10 },
     ];
     const { calls } = await boot({ "/api/files": { files } });
     $('.tabs button[data-tab="files"]').click();
@@ -215,17 +213,14 @@ describe("abas", () => {
     expect($('.tabs button[data-tab="downloads"]').classList.contains("active")).toBe(false);
     const items = [...document.querySelectorAll("#files .item")];
     expect(items).toHaveLength(2);
-    expect(items[0].querySelector("a.icon").textContent).toBe("♪");
-    expect(items[0].querySelector("a.icon").getAttribute("href")).toBe(
-      `/api/file?path=${encodeURIComponent("C:/m.mp3")}`,
-    );
+    expect($("#files .files-head span").textContent).toBe("2 arquivos salvos pelo Salvaí");
+    expect(items[0].querySelector(".icon.play").textContent).toBe("♪");
+    expect(items[0].querySelector(".icon.play").dataset.play).toBe("m1");
     expect(items[0].querySelector("strong").textContent).toBe("Música <1>");
     expect(items[0].querySelector("small").textContent).toBe("Músicas · 3.2 MB");
-    expect(items[1].querySelector("a.icon").textContent).toBe("▶");
+    expect(items[1].querySelector(".icon.play").textContent).toBe("▶");
     expect(items[1].querySelector("small").textContent).toBe("10 MB");
-    expect(items[1].querySelector("a.save").getAttribute("href")).toBe(
-      `/api/file?path=${encodeURIComponent("C:/v.mp4")}&dl=1`,
-    );
+    expect(items[1].querySelector("a.save").getAttribute("href")).toBe("/api/file?id=v1&dl=1");
     const first = $("#files .item");
     await vi.advanceTimersByTimeAsync(5000);
     expect($("#files .item")).toBe(first);
@@ -236,11 +231,175 @@ describe("abas", () => {
     expect($("#files").hidden).toBe(true);
   });
 
-  test("mostra mensagem quando a pasta está vazia", async () => {
+  test("mostra mensagem quando nada foi salvo pelo Salvaí", async () => {
     await boot({ "/api/files": { files: [] } });
     $('.tabs button[data-tab="files"]').click();
     await settle();
-    expect($("#files").textContent).toContain("ainda está vazia");
+    expect($("#files").textContent).toContain("Nada salvo pelo Salvaí ainda");
+  });
+
+  test("conta um arquivo no singular", async () => {
+    await boot({ "/api/files": { files: [{ name: "a.mp4", id: "a", kind: "video", folder: "", size_mb: 1 }] } });
+    $('.tabs button[data-tab="files"]').click();
+    await settle();
+    expect($("#files .files-head span").textContent).toBe("1 arquivo salvo pelo Salvaí");
+  });
+});
+
+const VIDEO = { name: "Aula <1>.mp4", id: "v1", kind: "video", folder: "Química", size_mb: 12 };
+const MUSIC = { name: "Lofi.mp3", id: "m1", kind: "audio", folder: "", size_mb: 3 };
+
+async function openFiles(responses = {}) {
+  const result = await boot({ "/api/files": { files: [VIDEO, MUSIC] }, ...responses });
+  $('.tabs button[data-tab="files"]').click();
+  await settle();
+  return result;
+}
+
+const sheetButtons = () => [...document.querySelectorAll("#sheet-actions button")];
+const press = (label) =>
+  sheetButtons()
+    .find((b) => b.textContent === label)
+    .click();
+const posts = (calls, path) => calls.filter((c) => c.path === path).map((c) => JSON.parse(c.options.body));
+
+describe("ações nos arquivos", () => {
+  test("menu de um arquivo abre e fecha com animação", async () => {
+    await openFiles();
+    document.querySelector('[data-more="v1"]').click();
+    expect($("#sheet").hidden).toBe(false);
+    expect($("#sheet-title").textContent).toBe("Aula <1>.mp4");
+    expect(sheetButtons().map((b) => b.textContent)).toEqual([
+      "Assistir no celular",
+      "Tirar da lista",
+      "Apagar do computador",
+      "Cancelar",
+    ]);
+    expect(sheetButtons()[2].className).toBe("danger");
+    await vi.advanceTimersByTimeAsync(16);
+    expect($("#sheet").classList.contains("show")).toBe(true);
+    press("Cancelar");
+    expect($("#sheet").classList.contains("show")).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect($("#sheet").hidden).toBe(true);
+    document.querySelector('[data-more="m1"]').click();
+    expect(sheetButtons()[0].textContent).toBe("Ouvir no celular");
+    document.querySelector("#sheet [data-close]").click();
+    expect($("#sheet").classList.contains("show")).toBe(false);
+  });
+
+  test("tirar da lista avisa que o arquivo continua no PC", async () => {
+    const { calls } = await openFiles({ "/api/files/forget": { ok: true } });
+    document.querySelector('[data-more="v1"]').click();
+    press("Tirar da lista");
+    await settle();
+    expect(posts(calls, "/api/files/forget")).toEqual([{ id: "v1" }]);
+    expect($("#toast").className).toBe("toast show");
+    expect($("#toast").textContent).toContain("continua no computador");
+    await vi.advanceTimersByTimeAsync(2800);
+    expect($("#toast").classList.contains("show")).toBe(false);
+  });
+
+  test("apagar do PC pede confirmação e manda para a Lixeira", async () => {
+    const { calls } = await openFiles({ "/api/files/trash": { trashed: "Aula <1>.mp4" } });
+    document.querySelector('[data-more="v1"]').click();
+    press("Apagar do computador");
+    expect($("#sheet-title").textContent).toBe("Apagar do computador?");
+    expect($("#sheet-desc").textContent).toContain('"Aula <1>.mp4" vai para a Lixeira do computador');
+    expect(posts(calls, "/api/files/trash")).toEqual([]);
+    press("Apagar");
+    await settle();
+    expect(posts(calls, "/api/files/trash")).toEqual([{ id: "v1" }]);
+    expect($("#toast").textContent).toBe("Arquivo enviado para a Lixeira do computador.");
+  });
+
+  test("cancelar a confirmação não apaga nada", async () => {
+    const { calls } = await openFiles();
+    document.querySelector('[data-more="v1"]').click();
+    press("Apagar do computador");
+    press("Cancelar");
+    await settle();
+    expect(posts(calls, "/api/files/trash")).toEqual([]);
+  });
+
+  test("limpar lista pede confirmação", async () => {
+    const { calls } = await openFiles({ "/api/files/clear": { ok: true } });
+    $("#files [data-clear]").click();
+    expect($("#sheet-title").textContent).toBe("Limpar a lista?");
+    press("Limpar lista");
+    await settle();
+    expect(posts(calls, "/api/files/clear")).toEqual([{ id: "" }]);
+    expect($("#toast").textContent).toContain("Lista limpa");
+  });
+
+  test("mostra o erro do PC em vermelho", async () => {
+    await openFiles({ "/api/files/trash": { status: 400, body: { error: "Arquivo não encontrado." } } });
+    document.querySelector('[data-more="v1"]').click();
+    press("Apagar do computador");
+    press("Apagar");
+    await settle();
+    expect($("#toast").className).toBe("toast show error");
+    expect($("#toast").textContent).toBe("Arquivo não encontrado.");
+  });
+
+  test("ignora cliques fora dos botões e arquivos que sumiram", async () => {
+    await openFiles();
+    $("#files .meta").click();
+    const stale = document.createElement("button");
+    stale.dataset.more = "sumiu";
+    $("#files").appendChild(stale);
+    stale.click();
+    expect($("#sheet").hidden).toBe(true);
+  });
+});
+
+describe("assistir no celular", () => {
+  let play;
+
+  beforeEach(() => {
+    play = vi.fn(() => Promise.resolve());
+    HTMLMediaElement.prototype.play = play;
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+  });
+
+  test("toca o vídeo pelo ícone e fecha parando tudo", async () => {
+    await openFiles();
+    document.querySelector('[data-play="v1"]').click();
+    const video = $("#player-video");
+    expect($("#player").hidden).toBe(false);
+    expect($("#player-title").textContent).toBe("Aula <1>.mp4");
+    expect(video.getAttribute("src")).toBe("/api/file?id=v1");
+    expect($("#player").classList.contains("audio")).toBe(false);
+    expect(play).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(16);
+    expect($("#player").classList.contains("show")).toBe(true);
+    $("#player-close").click();
+    expect(video.pause).toHaveBeenCalled();
+    expect(video.hasAttribute("src")).toBe(false);
+    expect($("#player").hidden).toBe(true);
+  });
+
+  test("música abre no modo áudio pelo menu", async () => {
+    await openFiles();
+    document.querySelector('[data-more="m1"]').click();
+    press("Ouvir no celular");
+    expect($("#sheet").classList.contains("show")).toBe(false);
+    expect($("#player").classList.contains("audio")).toBe(true);
+    expect($("#player-video").getAttribute("src")).toBe("/api/file?id=m1");
+  });
+
+  test("avisa quando o formato não toca no celular", async () => {
+    play.mockImplementation(() => Promise.reject(new Error("bloqueado")));
+    await openFiles();
+    document.querySelector('[data-play="v1"]').click();
+    await settle();
+    $("#player-video").dispatchEvent(new Event("error"));
+    expect($("#player-error").textContent).toContain("não consegue tocar esse formato");
+    $("#player-close").click();
+    $("#player-video").dispatchEvent(new Event("error"));
+    document.querySelector('[data-play="v1"]').click();
+    expect($("#player-error").textContent).toBe("");
   });
 });
 
