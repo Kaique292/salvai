@@ -294,7 +294,14 @@ function refreshQueue() {
     .map((li) => li.querySelector(".q-thumb").src)
     .filter(Boolean);
   const stack = $("#queue-stack");
-  stack.innerHTML = thumbs.map((s) => `<img src="${s}" alt="">`).join("");
+  stack.replaceChildren(
+    ...thumbs.map((src) => {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = src;
+      return img;
+    }),
+  );
   stack.style.width =
     queueEl.classList.contains("collapsed") && thumbs.length ? `${28 + (thumbs.length - 1) * 19}px` : "0px";
 }
@@ -656,9 +663,9 @@ const storage = (() => {
       row.style.setProperty("--c", COLORS[c.key]);
       row.innerHTML = `
         <span class="st-check">${check}</span>
-        <span class="st-name"><span class="st-dot"></span>${c.name}</span>
+        <span class="st-name"><span class="st-dot"></span>${escapeHtml(c.name)}</span>
         <span class="st-size">${fmtSize(c.size)}</span>
-        <span class="st-desc">${c.desc}</span>`;
+        <span class="st-desc">${escapeHtml(c.desc)}</span>`;
       row.addEventListener("click", (e) => {
         e.preventDefault();
         selected.has(c.key) ? selected.delete(c.key) : selected.add(c.key);
@@ -715,7 +722,7 @@ const storage = (() => {
     info = res.info;
     render();
     const box = $("#st-result");
-    box.firstElementChild.innerHTML = `<div class="st-result-box"><strong>✓ ${fmtSize(res.freed)} liberados</strong>${res.notes.map((n) => `<p>${n}</p>`).join("")}</div>`;
+    box.firstElementChild.innerHTML = `<div class="st-result-box"><strong>✓ ${fmtSize(res.freed)} liberados</strong>${res.notes.map((n) => `<p>${escapeHtml(n)}</p>`).join("")}</div>`;
     box.classList.add("show");
   }
 
@@ -799,7 +806,7 @@ const accounts = (() => {
 
   function showResult(text, ok) {
     const box = $("#acc-result");
-    box.firstElementChild.innerHTML = `<div class="acc-result-box ${ok ? "ok" : "warn"}">${text}</div>`;
+    box.firstElementChild.innerHTML = `<div class="acc-result-box ${ok ? "ok" : "warn"}">${escapeHtml(text)}</div>`;
     box.classList.add("show");
   }
 

@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -223,7 +224,12 @@ def ensure_js_runtime() -> dict:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
         tmp_zip, tmp_exe = BIN_DIR / "deno.zip.part", BIN_DIR / "deno.exe.part"
         try:
-            urllib.request.urlretrieve(DENO_URL, tmp_zip)
+            sums = urllib.request.urlopen(DENO_URL + ".sha256sum", timeout=30).read().decode("utf-8", "replace")
+            expected = re.search(r"\b[0-9a-fA-F]{64}\b", sums)
+            data = urllib.request.urlopen(DENO_URL, timeout=180).read()
+            if not expected or hashlib.sha256(data).hexdigest() != expected.group(0).lower():
+                raise RuntimeError("o Deno baixado não confere com o hash oficial")
+            tmp_zip.write_bytes(data)
             with zipfile.ZipFile(tmp_zip) as z:
                 tmp_exe.write_bytes(z.read("deno.exe"))
             tmp_exe.replace(BIN_DIR / "deno.exe")
@@ -514,6 +520,8 @@ class Bridge:
         bridge = self
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = 60
+
             def log_message(self, *args):
                 pass
 
@@ -526,16 +534,15 @@ class Bridge:
                 self.wfile.write(body)
 
             def _handle(self, method: str):
+                if host_name(self.headers.get("Host")) not in ("127.0.0.1", "localhost"):
+                    return self._reply(421, {"error": "host inválido"})
                 auth = self.headers.get("Authorization", "")
                 if not secrets.compare_digest(auth, f"Bearer {bridge.token}"):
                     return self._reply(401, {"error": "token inválido"})
                 url = urllib.parse.urlparse(self.path)
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
-                body = {}
-                if method == "POST":
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
                 try:
+                    body = read_json_body(self) if method == "POST" else {}
                     result = bridge.route(method, url.path, query, body)
                     self._reply(200, result)
                 except (KeyError, ValueError) as e:
@@ -573,7 +580,12 @@ class Bridge:
             return api._search(body["query"], int(body.get("limit", 5)), body.get("site", "youtube"))
         if (method, path) == ("POST", "/downloads"):
             created = []
-            for it in body["items"]:
+            for it in body["items"][:50]:
+                try:
+                    validate_remote_url(str(it.get("url", "")).strip())
+                except ValueError as e:
+                    created.append({"url": it.get("url"), "error": str(e)})
+                    continue
                 fmt, quality = normalize_request(it.get("format", "mp4"), it.get("quality", "max"))
                 items = api._enqueue(it["url"], fmt, quality, it.get("folder", ""), source="claude")
                 created += [
@@ -618,6 +630,74 @@ MEDIA_EXTENSIONS = {".mp4", ".mp3", ".m4a", ".webm", ".mkv", ".mov", ".opus", ".
 CREATE_NO_WINDOW = 0x08000000
 
 
+MAX_BODY = 64 * 1024
+PHONE_IDLE_LIMIT = 30 * 60
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+MOBILE_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; "
+    "media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+def read_json_body(handler: BaseHTTPRequestHandler) -> dict:
+    length = int(handler.headers.get("Content-Length") or 0)
+    if length < 0 or length > MAX_BODY:
+        raise ValueError("pedido grande demais")
+    data = json.loads(handler.rfile.read(length) or b"{}")
+    if not isinstance(data, dict):
+        raise ValueError("pedido inválido")
+    return data
+
+
+def host_name(host_header: str) -> str:
+    host = (host_header or "").strip()
+    if host.startswith("["):
+        return host[1 : host.find("]")] if "]" in host else ""
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.split("%")[0])
+        return True
+    except ValueError:
+        return False
+
+
+def is_internal_target(url: str) -> bool:
+    host = (urllib.parse.urlparse(url).hostname or "").lower().rstrip(".")
+    if not host or host == "localhost" or host.endswith((".localhost", ".local", ".lan", ".home", ".internal")):
+        return True
+    addresses = []
+    if is_ip_literal(host):
+        addresses = [host]
+    else:
+        try:
+            addresses = [info[4][0] for info in socket.getaddrinfo(host, None)]
+        except OSError:
+            return False
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%")[0])
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if not ip.is_global:
+            return True
+    return False
+
+
+def validate_remote_url(url: str) -> None:
+    if not URL_RE.fullmatch(url or ""):
+        raise ValueError("isso não parece um link")
+    if is_internal_target(url):
+        raise ValueError("links para a rede interna ou para este computador não são permitidos")
+
+
 def lan_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(("10.255.255.255", 1))
@@ -628,7 +708,7 @@ NETWORK_SCRIPT = (
     "Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -or $_.IPv6DefaultGateway } | ForEach-Object { "
     "[pscustomobject]@{ alias = $_.InterfaceAlias; media = $_.NetAdapter.PhysicalMediaType; "
     "network = $_.NetProfile.Name; category = [string]$_.NetProfile.NetworkCategory; "
-    "ipv4 = @($_.IPv4Address | ForEach-Object { $_.IPAddress }); "
+    "ipv4 = @($_.IPv4Address | ForEach-Object { $_.IPAddress + '/' + $_.PrefixLength }); "
     "ipv6 = @($_.IPv6Address | ForEach-Object { $_.IPAddress }) } } | ConvertTo-Json -Depth 3 -Compress"
 )
 
@@ -661,12 +741,23 @@ def home_network() -> dict:
         interfaces = read_interfaces()
     except Exception:
         interfaces = []
-    candidates = [i for i in interfaces if any(is_private_v4(a) for a in i.get("ipv4") or [])]
-    chosen = next((i for i in candidates if primary in (i.get("ipv4") or [])), candidates[0] if candidates else None)
+    for interface in interfaces:
+        interface["cidr"] = list(interface.get("ipv4") or [])
+        interface["ipv4"] = [c.split("/")[0] for c in interface["cidr"]]
+    candidates = [i for i in interfaces if any(is_private_v4(a) for a in i["ipv4"])]
+    chosen = next((i for i in candidates if primary in i["ipv4"]), candidates[0] if candidates else None)
     if not chosen:
         chosen = next(iter(interfaces), None)
     if not chosen:
-        return {"kind": None, "name": None, "public": False, "ipv4": [primary], "ipv6": [], "v6_networks": []}
+        return {
+            "kind": None,
+            "name": None,
+            "public": False,
+            "ipv4": [primary],
+            "ipv6": [],
+            "v4_networks": [],
+            "v6_networks": [],
+        }
     media = (chosen.get("media") or "").lower()
     ipv6 = [a for a in chosen.get("ipv6") or [] if not a.lower().startswith("fe80")]
     return {
@@ -674,6 +765,11 @@ def home_network() -> dict:
         "name": chosen.get("network"),
         "public": (chosen.get("category") or "").lower() == "public",
         "ipv4": [a for a in chosen.get("ipv4") or [] if is_private_v4(a)],
+        "v4_networks": [
+            str(ipaddress.ip_network(c, strict=False))
+            for c in chosen.get("cidr") or []
+            if is_private_v4(c.split("/")[0])
+        ],
         "ipv6": ipv6,
         "v6_networks": [str(ipaddress.ip_network(f"{a}/64", strict=False)) for a in ipv6],
     }
@@ -719,6 +815,8 @@ def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, 
     handler.send_header("Content-Length", str(end - start + 1))
     handler.send_header("Accept-Ranges", "bytes")
     handler.send_header("ETag", etag)
+    for name, value in SECURITY_HEADERS.items():
+        handler.send_header(name, value)
     handler.send_header("Last-Modified", email.utils.formatdate(stat.st_mtime, usegmt=True))
     fallback = re.sub(r"[^ -~]", "_", path.name).replace('"', "")
     disposition = "attachment" if as_attachment else "inline"
@@ -811,6 +909,22 @@ class PhoneServer:
     def __init__(self, api: "Api"):
         self.api, self.server, self.token, self.devices = api, None, "", {}
         self.network, self.network_at, self.network_lock = None, 0.0, threading.Lock()
+        self.failures: dict[str, list[float]] = {}
+        self.adds: deque = deque()
+        self.last_activity = 0.0
+
+    def blocked(self, ip: str) -> bool:
+        now = time.time()
+        recent = [t for t in self.failures.get(ip, []) if now - t < 600]
+        self.failures[ip] = recent
+        return len(recent) >= 20
+
+    def watch_idle(self, server):
+        while self.server is server:
+            time.sleep(30)
+            if self.server is server and time.time() - self.last_activity > PHONE_IDLE_LIMIT:
+                self.stop()
+                self.api._phone_auto_off()
 
     def refresh_network(self):
         with self.network_lock:
@@ -828,6 +942,9 @@ class PhoneServer:
         if ip.is_loopback or ip.is_link_local:
             return True
         if ip.version == 4:
+            v4_networks = (self.network or {}).get("v4_networks") or []
+            if v4_networks:
+                return any(ip in ipaddress.ip_network(n) for n in v4_networks)
             return ip.is_private
         networks = (self.network or {}).get("v6_networks") or []
         return any(ip in ipaddress.ip_network(n) for n in networks)
@@ -848,46 +965,62 @@ class PhoneServer:
         if self.server:
             return
         phone = self
-        self.token = secrets.token_urlsafe(12)
-        self.devices = {}
+        self.token = secrets.token_urlsafe(16)
+        self.devices, self.failures, self.adds = {}, {}, deque()
+        self.last_activity = time.time()
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = 60
+
             def log_message(self, *args):
                 pass
 
-            def _json(self, code: int, payload, cookie: str | None = None):
+            def _json(self, code: int, payload):
                 body = json.dumps(payload, ensure_ascii=False).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
+                for name, value in SECURITY_HEADERS.items():
+                    self.send_header(name, value)
                 self.end_headers()
-                self.wfile.write(body)
+                if self.command != "HEAD":
+                    self.wfile.write(body)
 
             def _allowed(self, query: dict) -> bool:
-                if not phone.client_allowed(self.client_address[0]):
-                    return False
                 cookie = re.search(r"salvai=([\w-]+)", self.headers.get("Cookie") or "")
                 given = query.get("k") or (cookie.group(1) if cookie else "")
                 return secrets.compare_digest(given, phone.token)
 
+            def _same_origin(self) -> bool:
+                origin = self.headers.get("Origin")
+                if not origin:
+                    return True
+                return urllib.parse.urlparse(origin).netloc == (self.headers.get("Host") or "")
+
             def _handle(self, method: str):
+                ip = self.client_address[0]
+                if not phone.client_allowed(ip) or not is_ip_literal(host_name(self.headers.get("Host"))):
+                    return self._json(403, {"error": "Acesso permitido só pela rede local, abrindo o QR code."})
+                if phone.blocked(ip):
+                    return self._json(429, {"error": "Muitas tentativas. Espere alguns minutos."})
                 url = urllib.parse.urlparse(self.path)
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
                 if not self._allowed(query):
+                    phone.failures.setdefault(ip, []).append(time.time())
                     return self._json(403, {"error": "Abra pelo QR code que aparece no Salvaí do computador."})
-                phone.devices[self.client_address[0]] = {
-                    "name": device_name(self.headers.get("User-Agent")),
-                    "seen": time.time(),
-                }
+                if method == "POST" and not self._same_origin():
+                    return self._json(403, {"error": "origem inválida"})
+                phone.last_activity = time.time()
+                phone.devices[ip] = {"name": device_name(self.headers.get("User-Agent")), "seen": time.time()}
                 try:
                     phone.route(self, method, url.path, query)
                 except (ConnectionError, BrokenPipeError):
                     pass
                 except (KeyError, ValueError) as e:
                     self._json(400, {"error": str(e)})
-                except Exception as e:
-                    self._json(500, {"error": clean_error(e)})
+                except Exception:
+                    self._json(500, {"error": "Algo deu errado no computador. Tente de novo."})
 
             def do_GET(self):
                 self._handle("GET")
@@ -912,6 +1045,7 @@ class PhoneServer:
             raise RuntimeError("não foi possível abrir o acesso na rede")
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         threading.Thread(target=self.refresh_network, daemon=True).start()
+        threading.Thread(target=self.watch_idle, args=(self.server,), daemon=True).start()
 
     def stop(self):
         if self.server:
@@ -921,14 +1055,25 @@ class PhoneServer:
 
     def route(self, h, method: str, path: str, query: dict):
         api = self.api
+        if method == "GET" and path == "/" and query.get("k"):
+            h.send_response(303)
+            h.send_header("Location", "/")
+            h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            h.send_header("Content-Length", "0")
+            h.send_header("Cache-Control", "no-store")
+            for name, value in SECURITY_HEADERS.items():
+                h.send_header(name, value)
+            h.end_headers()
+            return
         if method == "GET" and path == "/":
             page = (BASE / "ui" / "mobile" / "index.html").read_bytes()
             h.send_response(200)
             h.send_header("Content-Type", "text/html; charset=utf-8")
             h.send_header("Content-Length", str(len(page)))
             h.send_header("Cache-Control", "no-store")
-            if query.get("k"):
-                h.send_header("Set-Cookie", f"salvai={self.token}; Path=/; SameSite=Strict; HttpOnly")
+            h.send_header("Content-Security-Policy", MOBILE_CSP)
+            for name, value in SECURITY_HEADERS.items():
+                h.send_header(name, value)
             h.end_headers()
             h.wfile.write(page)
             return
@@ -938,10 +1083,17 @@ class PhoneServer:
             downloads = [dict(api._report(i), thumb=i.get("thumb")) for i in api._ordered()]
             return h._json(200, {"version": APP_VERSION, "computer": socket.gethostname(), "downloads": downloads})
         if method == "POST" and path == "/api/add":
-            length = int(h.headers.get("Content-Length") or 0)
-            body = json.loads(h.rfile.read(length) or b"{}")
+            body = read_json_body(h)
+            now = time.time()
+            while self.adds and now - self.adds[0] > 60:
+                self.adds.popleft()
+            if len(self.adds) >= 20:
+                return h._json(429, {"error": "Muitos pedidos em pouco tempo. Espere um minuto."})
+            self.adds.append(now)
+            url = str(body.get("url", "")).strip()
+            validate_remote_url(url)
             fmt, quality = normalize_request(body.get("format", "mp4"), body.get("quality", "max"))
-            items = api._enqueue(body["url"], fmt, quality, source="phone")
+            items = api._enqueue(url, fmt, quality, source="phone")
             if not items:
                 raise ValueError("Isso não parece um link.")
             return h._json(200, {"queued": len(items)})
@@ -950,7 +1102,7 @@ class PhoneServer:
         if method in ("GET", "HEAD") and path == "/api/file":
             base = Path(api._out_dir).resolve()
             target = (base / query["path"]).resolve()
-            if base not in target.parents or not target.is_file():
+            if base not in target.parents or not target.is_file() or target.suffix.lower() not in MEDIA_EXTENSIONS:
                 raise ValueError("Arquivo não encontrado.")
             return send_file(h, target, as_attachment=query.get("dl") == "1", head=method == "HEAD")
         h._json(404, {"error": "não encontrado"})
@@ -1025,9 +1177,11 @@ def swap_files(staged: list[tuple[Path, Path]]) -> None:
         raise
 
 
-def install_release(release: dict, current_exe: Path, staging: Path, progress=None) -> str:
+def install_release(release: dict, current_exe: Path, staging: Path, progress=None, trusted_prefix: str = "") -> str:
     version = release["tag_name"].lstrip("v")
     assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
+    if trusted_prefix and any(not url.startswith(trusted_prefix) for url in assets.values()):
+        raise RuntimeError("a release tem arquivos fora do repositório oficial")
     if "Salvai.exe" not in assets or "SHA256SUMS.txt" not in assets:
         raise RuntimeError("essa versão ainda não tem os arquivos publicados")
     sums = parse_sums(download(assets["SHA256SUMS.txt"]).decode())
@@ -1427,6 +1581,17 @@ class Api:
             pass
         self._tray.refresh()
 
+    def _phone_auto_off(self):
+        self._tray.refresh()
+        self._tray.notify(
+            "Modo celular desligado",
+            "Desliguei o modo celular depois de 30 minutos sem uso, por segurança. Ligue de novo quando precisar.",
+        )
+        try:
+            self._window.run_js("window.app && app.phoneChanged && app.phoneChanged()")
+        except Exception:
+            pass
+
     def _quit(self):
         self._quitting = True
         self._phone.stop()
@@ -1578,9 +1743,10 @@ class Api:
 
     def phone_allow_firewall(self) -> bool:
         port = self._phone.server.server_address[1] if self._phone.server else PHONE_PORT
+        program = Path(sys.executable).resolve()
         args = (
             f'advfirewall firewall add rule name="Salvaí (celular)" dir=in action=allow protocol=TCP '
-            f"localport={port} profile=private,public"
+            f'localport={int(port)} profile=private,public program="{program}"'
         )
         result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0)
         return result > 32
@@ -1925,6 +2091,8 @@ class Api:
             if not getattr(sys, "frozen", False):
                 return {"ok": False, "message": "A atualização automática funciona no app instalado (Salvai.exe)."}
             release = github_latest(APP_REPO)
+            if version_key(release["tag_name"].lstrip("v")) <= version_key(APP_VERSION):
+                return {"ok": False, "message": "Você já está na versão mais recente."}
             last = [0.0]
 
             def progress(fraction: float):
@@ -1936,7 +2104,13 @@ class Api:
                     except Exception:
                         pass
 
-            version = install_release(release, Path(sys.executable).resolve(), CONFIG_PATH.parent / "update", progress)
+            version = install_release(
+                release,
+                Path(sys.executable).resolve(),
+                CONFIG_PATH.parent / "update",
+                progress,
+                trusted_prefix=f"https://github.com/{APP_REPO}/releases/download/",
+            )
             return {"ok": True, "version": version}
         except PermissionError:
             return {
