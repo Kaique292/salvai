@@ -433,4 +433,48 @@ describe("sala de troca", () => {
     await window.app.roomChanged();
     expect(api.room_status.mock.calls.length).toBe(calls + 2);
   });
+
+  test("arrastar e soltar arquivos na sala", async () => {
+    const drag = (target, type, types) => {
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      if (types) Object.defineProperty(e, "dataTransfer", { value: { types, dropEffect: "" } });
+      target.dispatchEvent(e);
+      return e;
+    };
+    const { api } = await setup([{ role: null, phase: "idle", name: "" }, hostState()]);
+    const modal = $("#room-modal");
+    const dropping = () => modal.classList.contains("dropping");
+    expect(drag(document.body, "dragover").defaultPrevented).toBe(true);
+    expect(drag(document.body, "drop").defaultPrevented).toBe(true);
+    await openModal();
+    drag(modal, "dragenter", ["Files"]);
+    expect(dropping()).toBe(false);
+    expect(drag(modal, "dragover", ["Files"]).dataTransfer.dropEffect).toBe("none");
+    drag(modal, "drop", ["Files"]);
+    expect($("#room-pane-mine").hidden).toBe(true);
+    await window.app.roomChanged();
+    drag(modal, "dragenter");
+    drag(modal, "dragenter", ["text/plain"]);
+    expect(dropping()).toBe(false);
+    drag(modal, "dragenter", ["Files"]);
+    drag(modal, "dragenter", ["Files"]);
+    expect(dropping()).toBe(true);
+    expect(drag(modal, "dragover", ["Files"]).dataTransfer.dropEffect).toBe("copy");
+    drag(modal, "dragover");
+    drag(modal, "dragleave");
+    expect(dropping()).toBe(true);
+    drag(modal, "dragleave");
+    drag(modal, "dragleave");
+    expect(dropping()).toBe(false);
+    drag(modal, "dragenter", ["Files"]);
+    drag(modal, "drop");
+    expect(dropping()).toBe(false);
+    expect($("#room-pane-mine").hidden).toBe(true);
+    drag(modal, "drop", ["Files"]);
+    expect($("#room-pane-mine").hidden).toBe(false);
+    await window.app.roomDropped(hostState({ notice: "A sala já tem itens demais." }));
+    expect($("#room-notice").textContent).toBe("A sala já tem itens demais.");
+    expect($("#room-mine").children.length).toBe(2);
+    expect(api.room_add).not.toHaveBeenCalled();
+  });
 });

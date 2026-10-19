@@ -60,6 +60,7 @@ from PIL import Image
 
 splash_step(68, "Carregando a interface…")
 import webview
+from webview.dom import DOMEventHandler
 
 splash_step(76, "Carregando o motor de download…")
 
@@ -3583,6 +3584,22 @@ class Api:
         paths = [result] if isinstance(result, str) else list(result)
         return self._room_call(lambda room: room.add_paths(paths))
 
+    def _on_loaded(self):
+        modal = self._window.dom.get_element("#room-modal")
+        if modal:
+            modal.events.drop += DOMEventHandler(self._on_room_drop, prevent_default=True)
+
+    def _on_room_drop(self, event: dict):
+        files = (event.get("dataTransfer") or {}).get("files") or []
+        paths = [f["pywebviewFullPath"] for f in files if f.get("pywebviewFullPath")]
+        if not paths:
+            return
+        status = self._room_call(lambda room: room.add_paths(paths))
+        try:
+            self._window.run_js(f"window.app && app.roomDropped && app.roomDropped({json.dumps(status)})")
+        except Exception:
+            pass
+
     def room_remove(self, item_id: str) -> dict:
         return self._room_call(lambda room: room.remove_item(item_id))
 
@@ -4307,6 +4324,7 @@ def main():
     )
     api._window = window
     window.events.shown += api._on_shown
+    window.events.loaded += api._on_loaded
     window.events.closed += api._on_main_closed
     window.events.closing += api._on_closing
     bridge = Bridge(api)

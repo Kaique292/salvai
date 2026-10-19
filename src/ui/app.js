@@ -1674,6 +1674,26 @@ const room = (() => {
     .querySelectorAll(".room-tabs button")
     .forEach((b) => b.addEventListener("click", () => showTab(b.dataset.rtab)));
   $("#room-btn").addEventListener("click", open);
+  let dragDepth = 0;
+  const dragging = (on) => modal.classList.toggle("dropping", on);
+  const carriesFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  modal.addEventListener("dragenter", (e) => {
+    if (!carriesFiles(e) || state.phase !== "open") return;
+    dragDepth++;
+    dragging(true);
+  });
+  modal.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dragging(false);
+  });
+  modal.addEventListener("dragover", (e) => {
+    if (e.dataTransfer) e.dataTransfer.dropEffect = state.phase === "open" ? "copy" : "none";
+  });
+  modal.addEventListener("drop", (e) => {
+    dragDepth = 0;
+    dragging(false);
+    if (state.phase === "open" && carriesFiles(e)) showTab("mine");
+  });
   modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
   document.addEventListener(
     "keydown",
@@ -1686,6 +1706,8 @@ const room = (() => {
     true,
   );
 
-  return { sync: poll };
+  return { sync: poll, dropped: act };
 })();
 window.app.roomChanged = () => room.sync();
+window.app.roomDropped = (status) => room.dropped(status);
+["dragover", "drop"].forEach((type) => window.addEventListener(type, (e) => e.preventDefault()));

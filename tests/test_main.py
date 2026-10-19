@@ -39,6 +39,7 @@ def test_main_opens_window_and_exits_cleanly(launch, monkeypatch):
     window = launch.windows[0]
     assert window.kwargs["hidden"] and window.kwargs["background_color"] == "#0E0E11"
     assert len(window.events.closing.handlers) == 1 and len(window.events.closed.handlers) == 2
+    assert window.events.loaded.handlers[0].__func__ is app.Api._on_loaded
     assert launch.started[0]["storage_path"] == str(app.WEBVIEW_DIR)
     assert not app.WEBVIEW_DIR.exists() and not app.WEBVIEW_CLEAR_FLAG.exists()
     assert not app.BRIDGE_PATH.exists()
