@@ -323,6 +323,7 @@ button:disabled {
 }
 
 .item-icon {
+  position: relative;
   width: 36px;
   height: 36px;
   border-radius: 10px;
@@ -331,6 +332,15 @@ button:disabled {
   flex: none;
   background: var(--input);
   color: var(--muted);
+}
+
+.item-icon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .item-meta {

@@ -1,3 +1,4 @@
+import base64
 import copy
 import ctypes
 import email.utils
@@ -56,7 +57,7 @@ splash_step(64, "Iniciando…")
 import imageio_ffmpeg
 import pystray
 import segno
-from PIL import Image
+from PIL import Image, ImageOps
 
 splash_step(68, "Carregando a interface…")
 import webview
@@ -704,8 +705,8 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
 }
 MOBILE_CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; "
-    "media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; "
+    "media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
     "frame-ancestors 'none'"
 )
 
@@ -1699,6 +1700,11 @@ ROOM_RISKY = {
     ".jar",
     ".hta",
 }
+ROOM_IMAGES = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp"}
+ROOM_VIDEOS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".3gp", ".wmv"}
+ROOM_THUMB_SIZE = 240
+ROOM_THUMB_MAX = 64_000
+ROOM_THUMB_RE = re.compile(r"data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}")
 ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ROOM_LINK_RE = re.compile(r"(https://[a-z0-9-]+\.trycloudflare\.com)(?:/\S*)?", re.I)
 TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.I)
@@ -1877,6 +1883,48 @@ def scan_local(path: Path) -> dict:
     return {"kind": "folder", "name": path.name, "files": files}
 
 
+def media_kind(name: str) -> str:
+    ext = Path(name).suffix.lower()
+    return "image" if ext in ROOM_IMAGES else "video" if ext in ROOM_VIDEOS else ""
+
+
+def video_frame(path: Path) -> bytes:
+    for seek in ("1", "0"):
+        frame = subprocess.run(
+            [str(Path(ffmpeg_dir()) / "ffmpeg.exe"), "-v", "error", "-ss", seek, "-i", str(path)]
+            + ["-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            capture_output=True,
+            creationflags=CREATE_NO_WINDOW,
+            timeout=30,
+        ).stdout
+        if frame:
+            return frame
+    return b""
+
+
+def make_thumb(files: list[dict]) -> str:
+    source = next((Path(f["path"]) for f in files if media_kind(f["rel"])), None)
+    if not source:
+        return ""
+    try:
+        data = source if media_kind(source.name) == "image" else io.BytesIO(video_frame(source))
+        with Image.open(data) as image:
+            image.draft("RGB", (ROOM_THUMB_SIZE * 2, ROOM_THUMB_SIZE * 2))
+            picture = ImageOps.exif_transpose(image).convert("RGB")
+        picture.thumbnail((ROOM_THUMB_SIZE, ROOM_THUMB_SIZE))
+        out = io.BytesIO()
+        picture.save(out, "JPEG", quality=70)
+    except Exception:
+        return ""
+    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+
+
+def clean_thumb(value) -> str:
+    if not isinstance(value, str) or len(value) > ROOM_THUMB_MAX or not ROOM_THUMB_RE.fullmatch(value):
+        raise ValueError("Miniatura inválida.")
+    return value
+
+
 def make_item(owner: str, kind: str, name: str, files: list[dict]) -> dict:
     return {
         "id": secrets.token_hex(6),
@@ -1896,7 +1944,8 @@ def item_signature(item: dict) -> tuple:
 
 
 def public_item(item: dict) -> dict:
-    return {key: item[key] for key in ("id", "kind", "name", "size", "count", "risky")}
+    keys = ("id", "kind", "name", "size", "count", "risky")
+    return dict({key: item[key] for key in keys}, thumb=bool(item.get("thumb")))
 
 
 def parse_offer(entry) -> dict:
@@ -2050,6 +2099,51 @@ def room_whatsapp_message(url: str, code: str, host: str) -> str:
         "Se você tem o Salvaí, também dá para entrar pelo botão Sala de troca.\n"
         "⚠️ O link para de funcionar quando a sala fecha."
     )
+
+
+class LocalFiles:
+    def __init__(self):
+        self.server = None
+        self.files: dict[str, Path] = {}
+        self.lock = threading.Lock()
+
+    def share(self, path: Path) -> str:
+        with self.lock:
+            if not self.server:
+                self._start()
+            token = secrets.token_urlsafe(18)
+            self.files[token] = path
+        return f"http://127.0.0.1:{self.server.server_address[1]}/{token}/{urllib.parse.quote(path.name)}"
+
+    def _start(self):
+        files = self.files
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def send_header(self, keyword: str, value: str):
+                if keyword == "Cross-Origin-Resource-Policy":
+                    value = "cross-origin"
+                super().send_header(keyword, value)
+
+            def _serve(self, head: bool):
+                path = files.get(self.path.lstrip("/").split("/", 1)[0])
+                if host_name(self.headers.get("Host")) != "127.0.0.1" or not path or not path.is_file():
+                    return self.send_error(404)
+                try:
+                    send_file(self, path, False, head)
+                except (ConnectionError, TimeoutError):
+                    pass
+
+            def do_GET(self):
+                self._serve(False)
+
+            def do_HEAD(self):
+                self._serve(True)
+
+        self.server = ExclusiveHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
 class RoomBase:
@@ -2233,6 +2327,15 @@ class Room(RoomBase):
         if method == "GET" and path == "/api/files":
             item = self.host_item(query.get("item", ""))
             return h._json(200, {"files": [{"rel": f["rel"], "size": f["size"]} for f in item["files"]]})
+        if method == "GET" and path == "/api/thumb":
+            item = self.host_item(query.get("item", ""))
+            if not item.get("thumb"):
+                raise ValueError("Esse item não tem miniatura.")
+            return self.send_thumb(h, item["thumb"])
+        if method == "POST" and path == "/api/thumb":
+            body = read_json_body(h, ROOM_THUMB_MAX + 1024)
+            self.set_thumb(str(body.get("id", "")), session["id"], clean_thumb(body.get("thumb")))
+            return h._json(200, {"ok": True})
         if method == "POST" and path == "/api/offer":
             return h._json(200, {"ids": self.offer(session, read_json_body(h, ROOM_OFFER_BODY).get("items"))})
         if method == "POST" and path == "/api/unoffer":
@@ -2350,6 +2453,25 @@ class Room(RoomBase):
                 self.busy -= 1
             self.touch()
 
+    def send_thumb(self, h, thumb: str):
+        body = base64.b64decode(thumb.split(",", 1)[1])
+        h.send_response(200)
+        h.send_header("Content-Type", "image/jpeg")
+        h.send_header("Content-Length", str(len(body)))
+        h.send_header("Cache-Control", "private, max-age=3600")
+        for key, value in SECURITY_HEADERS.items():
+            h.send_header(key, value)
+        h.end_headers()
+        h.wfile.write(body)
+
+    def set_thumb(self, item_id: str, owner: str, thumb: str):
+        with self.lock:
+            item = self.items.get(item_id)
+            if not item or item["owner"] != owner:
+                raise ValueError("Não achei esse arquivo.")
+            item["thumb"] = thumb
+        self.api._room_changed()
+
     def send_zip(self, h, items: list[dict]):
         name = clean_name(items[0]["name"] if len(items) == 1 else f"Sala de {self.name}")
         fallback = re.sub(r"[^ -~]", "_", name).replace('"', "")
@@ -2389,14 +2511,24 @@ class Room(RoomBase):
         return ids
 
     def add_paths(self, paths: list[str]):
-        for path in paths:
-            entry = scan_local(Path(path))
-            item = make_item("host", entry["kind"], entry["name"], entry["files"])
-            with self.lock:
-                if sum(1 for i in self.items.values() if i["owner"] == "host") >= ROOM_MAX_ITEMS:
-                    raise ValueError("A sala já tem itens demais.")
-                self.items[item["id"]] = item
+        added = []
+        try:
+            for path in paths:
+                entry = scan_local(Path(path))
+                item = make_item("host", entry["kind"], entry["name"], entry["files"])
+                with self.lock:
+                    if sum(1 for i in self.items.values() if i["owner"] == "host") >= ROOM_MAX_ITEMS:
+                        raise ValueError("A sala já tem itens demais.")
+                    self.items[item["id"]] = item
+                added.append(item)
+        finally:
+            threading.Thread(target=self._thumbs, args=(added,), daemon=True).start()
         self.touch()
+        self.api._room_changed()
+
+    def _thumbs(self, items: list[dict]):
+        for item in items:
+            item["thumb"] = make_thumb(item["files"])
         self.api._room_changed()
 
     def remove_item(self, item_id: str, owner: str = "host") -> bool:
@@ -2496,10 +2628,17 @@ class Room(RoomBase):
             ]
             names = {s["id"]: s["name"] for s in self.sessions.values()}
             mine = [
-                dict(public_item(i), fetched=list(i["fetched"])) for i in self.items.values() if i["owner"] == "host"
+                dict(public_item(i), fetched=list(i["fetched"]), thumb=i.get("thumb", ""))
+                for i in self.items.values()
+                if i["owner"] == "host"
             ]
             theirs = [
-                dict(public_item(i), owner=names.get(i["owner"], ""), progress=job_progress(self.item_jobs(i["id"])))
+                dict(
+                    public_item(i),
+                    owner=names.get(i["owner"], ""),
+                    progress=job_progress(self.item_jobs(i["id"])),
+                    thumb=i.get("thumb", ""),
+                )
                 for i in self.items.values()
                 if i["owner"] != "host"
             ]
@@ -2570,6 +2709,7 @@ class RoomClient(RoomBase):
         self.local: dict[str, list[str]] = {}
         self.sending: set[str] = set()
         self.uploads: deque = deque()
+        self.thumbs: dict[str, str] = {}
 
     def request(self, method: str, path: str, body=None, data: bytes | None = None, headers=None, raw=False):
         head = {"User-Agent": f"Salvai/{APP_VERSION}", "X-Sala": "1"}
@@ -2650,6 +2790,17 @@ class RoomClient(RoomBase):
                 if req["id"] not in self.sending and req["item"] in self.local:
                     self.sending.add(req["id"])
                     self.uploads.append(req)
+        for item in state["items"]:
+            if item.get("thumb") and item["id"] not in self.thumbs:
+                self.thumbs[item["id"]] = self._thumb(item["id"])
+
+    def _thumb(self, item_id: str) -> str:
+        try:
+            with self.request("GET", f"/api/thumb?item={item_id}", raw=True) as response:
+                data = response.read(ROOM_THUMB_MAX)
+        except (RoomError, OSError):
+            return ""
+        return "data:image/jpeg;base64," + base64.b64encode(data).decode()
 
     def _sync(self):
         misses = 0
@@ -2752,7 +2903,21 @@ class RoomClient(RoomBase):
             with self.lock:
                 for item_id, entry in zip(ids, batch, strict=True):
                     self.local[item_id] = [f["path"] for f in entry["files"]]
+            pairs = [(i, e["files"]) for i, e in zip(ids, batch, strict=True)]
+            threading.Thread(target=self._send_thumbs, args=(pairs,), daemon=True).start()
         self.refresh()
+
+    def _send_thumbs(self, pairs: list[tuple[str, list[dict]]]):
+        for item_id, files in pairs:
+            thumb = make_thumb(files)
+            if not thumb:
+                continue
+            self.thumbs[item_id] = thumb
+            try:
+                self.request("POST", "/api/thumb", {"id": item_id, "thumb": thumb})
+            except (RoomError, OSError):
+                pass
+        self.api._room_changed()
 
     def remove_item(self, item_id: str, owner: str = "") -> bool:
         self.request("POST", "/api/unoffer", {"id": item_id})
@@ -2784,9 +2949,17 @@ class RoomClient(RoomBase):
         state = self.state
         with self.lock:
             theirs = [
-                dict(i, owner=self.host, progress=job_progress(self.item_jobs(i["id"]))) for i in state.get("items", [])
+                dict(
+                    i,
+                    owner=self.host,
+                    progress=job_progress(self.item_jobs(i["id"])),
+                    thumb=self.thumbs.get(i["id"], ""),
+                )
+                for i in state.get("items", [])
             ]
-            mine = [dict(i, local=i["id"] in self.local) for i in state.get("mine", [])]
+            mine = [
+                dict(i, local=i["id"] in self.local, thumb=self.thumbs.get(i["id"], "")) for i in state.get("mine", [])
+            ]
         return {
             "role": "guest",
             "phase": self.phase,
@@ -3297,6 +3470,7 @@ class Api:
         self._ready = False
         self._login_windows: dict[str, object] = {}
         self._phone = PhoneServer(self)
+        self._viewer = LocalFiles()
         self._room: RoomBase | None = None
         self._peek_cache: dict[str, tuple[float, dict]] = {}
         self._files_cache: tuple[float, list] | None = None
@@ -3843,6 +4017,21 @@ class Api:
             os.startfile(root)
         else:
             subprocess.Popen(["explorer", "/select,", os.path.normpath(root)])
+
+    def _room_file(self, item_id: str) -> Path | None:
+        root = self._room.item_root(item_id) if self._room else None
+        return root if root and root.exists() else None
+
+    def room_preview(self, item_id: str) -> dict:
+        path = self._room_file(item_id)
+        if not path or not path.is_file() or not media_kind(path.name):
+            return {}
+        return {"kind": media_kind(path.name), "name": path.name, "url": self._viewer.share(path)}
+
+    def room_open(self, item_id: str):
+        path = self._room_file(item_id)
+        if path:
+            os.startfile(path)
 
     def room_share_whatsapp(self) -> dict:
         status = self.room_status()

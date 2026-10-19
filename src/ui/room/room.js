@@ -1,11 +1,13 @@
 const $ = (s) => document.querySelector(s);
 const OFFER_BATCH = 50;
+const THUMB = 240;
 const FILE_ICON =
   '<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
 const FOLDER_ICON =
   '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 
 const local = new Map();
+const thumbs = new Map();
 const downloads = new Map();
 const selected = new Set();
 let state = null;
@@ -163,12 +165,13 @@ async function sync() {
   pump();
 }
 
-function row(item, extra) {
+function row(item, thumb, extra) {
   const li = document.createElement("li");
   li.className = "item";
   li.dataset.id = item.id;
   const risky = item.risky ? '<span class="risky">programa</span>' : "";
-  li.innerHTML = `<span class="item-icon">${item.kind === "folder" ? FOLDER_ICON : FILE_ICON}</span><div class="item-meta"><div class="item-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>${risky}</div><small>${escapeHtml(describe(item))}</small></div>`;
+  const img = thumb ? `<img src="${escapeHtml(thumb)}" alt="" />` : "";
+  li.innerHTML = `<span class="item-icon">${item.kind === "folder" ? FOLDER_ICON : FILE_ICON}${img}</span><div class="item-meta"><div class="item-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>${risky}</div><small>${escapeHtml(describe(item))}</small></div>`;
   extra(li, li.querySelector("small"));
   return li;
 }
@@ -198,13 +201,13 @@ function render() {
   selected.forEach((id) => ids.has(id) || selected.delete(id));
   $("#keep-open").hidden = !busy();
   buttons();
-  const key = JSON.stringify([state.items, state.mine, [...downloads], [...local.keys()]]);
+  const key = JSON.stringify([state.items, state.mine, [...downloads], [...local.keys()], [...thumbs.keys()]]);
   if (key === drawn) return;
   drawn = key;
   const theirs = $("#theirs");
   theirs.replaceChildren(
     ...state.items.map((item) =>
-      row(item, (li, small) => {
+      row(item, item.thumb ? `/api/thumb?item=${encodeURIComponent(item.id)}` : "", (li, small) => {
         const box = document.createElement("input");
         box.type = "checkbox";
         box.checked = selected.has(item.id);
@@ -236,7 +239,7 @@ function render() {
   const mine = $("#mine");
   mine.replaceChildren(
     ...state.mine.map((item) =>
-      row(item, (li, small) => {
+      row(item, thumbs.get(item.id), (li, small) => {
         if (!item.progress) small.textContent = `${describe(item)} · esperando ser pedido`;
         progressInto(li, small, item.progress, {
           done: "Enviado",
@@ -334,12 +337,73 @@ async function offer(files) {
       }));
       const { ids } = await post("/api/offer", { items: payload });
       ids.forEach((id, i) => local.set(id, batch[i].files));
+      sendThumbs(ids.map((id, i) => [id, batch[i].files]));
     }
     toast(items.length === 1 ? "Adicionado à sala" : `${items.length} itens adicionados à sala`);
   } catch (error) {
     toast(error.message, true);
   }
   await sync();
+}
+
+function loaded(el, ready) {
+  return new Promise((resolve, reject) => {
+    el.addEventListener(ready, () => resolve(el), { once: true });
+    el.addEventListener("error", reject, { once: true });
+  });
+}
+
+async function frame(file, url) {
+  if (file.type.startsWith("image/")) {
+    const img = new Image();
+    const done = loaded(img, "load");
+    img.src = url;
+    return [await done, img.naturalWidth, img.naturalHeight];
+  }
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  const meta = loaded(video, "loadeddata");
+  video.src = url;
+  await meta;
+  const seeked = loaded(video, "seeked");
+  video.currentTime = Math.min(1, (video.duration || 0) / 2);
+  await seeked;
+  return [video, video.videoWidth, video.videoHeight];
+}
+
+async function makeThumb(files) {
+  const file = files.find((f) => /^(image|video)\//.test(f.type));
+  if (!file) return "";
+  const url = URL.createObjectURL(file);
+  try {
+    const [source, width, height] = await frame(file, url);
+    const scale = Math.min(1, THUMB / Math.max(width, height, 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.7);
+  } catch {
+    return "";
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function sendThumbs(pairs) {
+  for (const [id, files] of pairs) {
+    const thumb = await makeThumb(files);
+    if (!thumb.startsWith("data:image/jpeg")) continue;
+    thumbs.set(id, thumb);
+    try {
+      await post("/api/thumb", { id, thumb });
+    } catch {
+      continue;
+    }
+  }
+  render();
 }
 
 async function remove(id) {
