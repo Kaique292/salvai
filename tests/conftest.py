@@ -86,8 +86,8 @@ class FakeWindow:
         self._maybe_fail("get_cookies")
         return self.cookies
 
-    def create_file_dialog(self, kind, directory=None):
-        self.calls.append(("dialog", kind, directory))
+    def create_file_dialog(self, kind, directory=None, allow_multiple=False):
+        self.calls.append(("dialog", kind, directory, allow_multiple))
         return self.dialog_result
 
 
@@ -191,6 +191,8 @@ def api(monkeypatch, tmp_path, isolated, fake_engine):
     instance._out_dir = str(out)
     yield instance
     instance._phone.stop()
+    if instance._room:
+        instance._room.close()
     with instance._cv:
         instance._items.clear()
         instance._order.clear()

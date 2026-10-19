@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -697,9 +698,9 @@ MOBILE_CSP = (
 )
 
 
-def read_json_body(handler: BaseHTTPRequestHandler) -> dict:
+def read_json_body(handler: BaseHTTPRequestHandler, limit: int = MAX_BODY) -> dict:
     length = int(handler.headers.get("Content-Length") or 0)
-    if length < 0 or length > MAX_BODY:
+    if length < 0 or length > limit:
         raise ValueError("pedido grande demais")
     data = json.loads(handler.rfile.read(length) or b"{}")
     if not isinstance(data, dict):
@@ -830,6 +831,7 @@ def home_network() -> dict:
 def device_name(user_agent: str) -> str:
     ua = user_agent or ""
     for marker, name in (
+        ("Salvai", "Salvaí"),
         ("iPhone", "iPhone"),
         ("iPad", "iPad"),
         ("Android", "Android"),
@@ -1303,6 +1305,1167 @@ class PhoneServer:
         }
 
 
+ROOM_IDLE_LIMIT = 30 * 60
+ROOM_TICK = 15
+ROOM_POLL = 1.5
+ROOM_CHUNK = 8 << 20
+ROOM_MAX_CHUNK = 16 << 20
+ROOM_MAX_FILES = 5000
+ROOM_MAX_ITEMS = 200
+ROOM_MAX_PENDING = 8
+ROOM_OFFER_BATCH = 50
+ROOM_OFFER_BODY = 4 << 20
+ROOM_RISKY = {
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".msi",
+    ".msix",
+    ".ps1",
+    ".vbs",
+    ".js",
+    ".jse",
+    ".wsf",
+    ".scr",
+    ".com",
+    ".cpl",
+    ".lnk",
+    ".reg",
+    ".jar",
+    ".hta",
+}
+ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+ROOM_LINK_RE = re.compile(r"(https://[a-z0-9-]+\.trycloudflare\.com)(?:/\S*)?", re.I)
+TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.I)
+CLOUDFLARED_REPO = "cloudflare/cloudflared"
+CLOUDFLARED_ASSET = "cloudflared-windows-amd64.exe"
+CLOUDFLARED_PREFIX = "https://github.com/cloudflare/cloudflared/releases/download/"
+CLOUDFLARED_PATH = BIN_DIR / "cloudflared.exe"
+CLOUDFLARED_MAX_AGE = 60 * 86400
+ROOM_SCHEME = "https"
+ROOM_JOIN_RETRY = 45
+DOH_URL = "https://cloudflare-dns.com/dns-query?type=A&name="
+ROOM_PAGES = {"/": "index.html", "/room.css": "room.css", "/room.js": "room.js"}
+RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_cloudflared_lock = threading.Lock()
+
+
+def release_checksums(body: str) -> dict[str, str]:
+    found = re.findall(r"^\s*([\w.-]+):\s*([0-9a-fA-F]{64})\s*$", body or "", re.M)
+    return {name: digest.lower() for name, digest in found}
+
+
+def ensure_cloudflared(progress=None) -> Path:
+    with _cloudflared_lock:
+        if CLOUDFLARED_PATH.exists() and time.time() - CLOUDFLARED_PATH.stat().st_mtime < CLOUDFLARED_MAX_AGE:
+            return CLOUDFLARED_PATH
+        tmp = CLOUDFLARED_PATH.with_name("cloudflared.exe.part")
+        try:
+            release = github_latest(CLOUDFLARED_REPO)
+            assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
+            url = assets.get(CLOUDFLARED_ASSET, "")
+            expected = release_checksums(release.get("body") or "").get(CLOUDFLARED_ASSET)
+            if not url.startswith(CLOUDFLARED_PREFIX) or not expected:
+                raise RuntimeError("não achei o conector oficial da Cloudflare")
+            data = download(url, progress)
+            if hashlib.sha256(data).hexdigest() != expected:
+                raise RuntimeError("o conector baixado não confere com o hash oficial")
+            BIN_DIR.mkdir(parents=True, exist_ok=True)
+            tmp.write_bytes(data)
+            tmp.replace(CLOUDFLARED_PATH)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            if CLOUDFLARED_PATH.exists():
+                return CLOUDFLARED_PATH
+            raise
+        return CLOUDFLARED_PATH
+
+
+class Tunnel:
+    def __init__(self):
+        self.proc, self.url, self.found = None, "", ""
+        self.ready = threading.Event()
+
+    def start(self, port: int, exe: Path, timeout: float = 60) -> str:
+        self.proc = subprocess.Popen(
+            [str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=CREATE_NO_WINDOW,
+        )
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        if not self.ready.wait(timeout) or not self.url:
+            self.stop()
+            raise RuntimeError("a Cloudflare não abriu o link agora. Tente de novo em instantes")
+        return self.url
+
+    def _read(self, proc):
+        for line in proc.stderr:
+            match = TUNNEL_URL_RE.search(line)
+            if match and match.group(0).lower() != "https://api.trycloudflare.com":
+                self.found = match.group(0).lower()
+            if self.found and "Registered tunnel connection" in line:
+                self.url = self.found
+                self.ready.set()
+        self.ready.set()
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def stop(self):
+        proc, self.proc = self.proc, None
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def dns_published(host: str) -> bool:
+    req = urllib.request.Request(DOH_URL + urllib.parse.quote(host), headers={"Accept": "application/dns-json"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        data = json.loads(r.read() or b"{}")
+    return data.get("Status") == 0 and bool(data.get("Answer"))
+
+
+def wait_public(url: str, timeout: float = 30) -> bool:
+    host = urllib.parse.urlparse(url).hostname or ""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if dns_published(host):
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
+def new_room_code() -> str:
+    return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(6))
+
+
+def normalize_code(code) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(code or "").upper())
+
+
+def format_code(code: str) -> str:
+    return f"{code[:3]} {code[3:]}" if code else ""
+
+
+def clean_label(text, fallback: str = "") -> str:
+    label = re.sub(r"[\x00-\x1f<>]", "", str(text or "")).strip()[:40]
+    return label or fallback
+
+
+def clean_name(name) -> str:
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name or "")).strip().rstrip(". ")
+    if text.split(".")[0].upper() in RESERVED_NAMES:
+        text = "_" + text
+    return text[:180] or "arquivo"
+
+
+def clean_rel(rel) -> list[str]:
+    parts = [p for p in re.split(r"[\\/]+", str(rel or "")) if p not in ("", ".", "..")]
+    return [clean_name(p) for p in parts] or ["arquivo"]
+
+
+def unique_path(path: Path) -> Path:
+    candidate, n = path, 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        n += 1
+    return candidate
+
+
+def is_risky(name: str) -> bool:
+    return Path(name).suffix.lower() in ROOM_RISKY
+
+
+def scan_local(path: Path) -> dict:
+    path = Path(path)
+    if path.is_file():
+        return {
+            "kind": "file",
+            "name": path.name,
+            "files": [{"rel": path.name, "size": file_size(path), "path": str(path)}],
+        }
+    if not path.is_dir():
+        raise ValueError("Não achei esse arquivo.")
+    files = []
+    for root, dirs, names in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if not Path(root, d).is_symlink())
+        for name in sorted(names):
+            full = Path(root, name)
+            if full.is_symlink() or not full.is_file():
+                continue
+            files.append({"rel": full.relative_to(path.parent).as_posix(), "size": file_size(full), "path": str(full)})
+            if len(files) > ROOM_MAX_FILES:
+                raise ValueError(f"Essa pasta tem arquivos demais (o máximo é {ROOM_MAX_FILES}).")
+    if not files:
+        raise ValueError("Essa pasta está vazia.")
+    return {"kind": "folder", "name": path.name, "files": files}
+
+
+def make_item(owner: str, kind: str, name: str, files: list[dict]) -> dict:
+    return {
+        "id": secrets.token_hex(6),
+        "owner": owner,
+        "kind": kind,
+        "name": clean_name(name),
+        "files": files,
+        "size": sum(f["size"] for f in files),
+        "count": len(files),
+        "risky": any(is_risky(f["rel"]) for f in files),
+        "fetched": [],
+    }
+
+
+def item_signature(item: dict) -> tuple:
+    return (item["kind"], item["name"], tuple((f["rel"], f["size"]) for f in item["files"]))
+
+
+def public_item(item: dict) -> dict:
+    return {key: item[key] for key in ("id", "kind", "name", "size", "count", "risky")}
+
+
+def parse_offer(entry) -> dict:
+    if not isinstance(entry, dict) or entry.get("kind") not in ("file", "folder"):
+        raise ValueError("Item inválido.")
+    files = entry.get("files")
+    if not isinstance(files, list) or not 1 <= len(files) <= ROOM_MAX_FILES:
+        raise ValueError("Lista de arquivos inválida.")
+    if entry["kind"] == "file" and len(files) != 1:
+        raise ValueError("Lista de arquivos inválida.")
+    clean = []
+    for f in files:
+        size = f.get("size") if isinstance(f, dict) else None
+        if type(size) is not int or not 0 <= size < 1 << 42 or not isinstance(f.get("rel"), str):
+            raise ValueError("Arquivo inválido.")
+        clean.append({"rel": "/".join(clean_rel(f["rel"])), "size": size})
+    return {"kind": entry["kind"], "name": str(entry.get("name") or clean[0]["rel"]), "files": clean}
+
+
+def plan_targets(item: dict, dest: Path) -> list[tuple[Path, Path]]:
+    if item["kind"] == "file":
+        target = dest / clean_name(item["name"])
+        return [(target, target)]
+    root = unique_path(dest / clean_name(item["name"]))
+    plan = []
+    for f in item["files"]:
+        parts = clean_rel(f["rel"])
+        plan.append((root.joinpath(*parts[1:]) if len(parts) > 1 else root / parts[0], root))
+    return plan
+
+
+def new_job(item: dict, index: int, target: Path, root: Path) -> dict:
+    return {
+        "id": secrets.token_hex(8),
+        "item": item["id"],
+        "owner": item["owner"],
+        "f": index,
+        "size": item["files"][index]["size"],
+        "received": 0,
+        "dest": target,
+        "root": root,
+        "part": target.with_name(target.name + ".salvai-part"),
+        "state": "waiting",
+        "error": "",
+    }
+
+
+def finish_job(job: dict) -> None:
+    job["dest"].parent.mkdir(parents=True, exist_ok=True)
+    if not job["part"].exists():
+        job["part"].write_bytes(b"")
+    final = unique_path(job["dest"])
+    job["part"].replace(final)
+    if job["root"] == job["dest"]:
+        job["root"] = final
+    job["dest"], job["state"] = final, "done"
+
+
+def restart_jobs(jobs: list[dict]) -> bool:
+    if not jobs or all(j["state"] == "done" for j in jobs):
+        return False
+    for job in jobs:
+        if job["state"] == "error":
+            job["state"], job["error"] = "waiting", ""
+    return True
+
+
+def job_progress(jobs: list[dict]) -> dict | None:
+    if not jobs:
+        return None
+    states = {j["state"] for j in jobs}
+    if states == {"done"}:
+        state = "done"
+    elif "error" in states:
+        state = "error"
+    else:
+        state = "sending" if "sending" in states else "waiting"
+    return {
+        "state": state,
+        "done": sum(j["received"] for j in jobs),
+        "total": sum(j["size"] for j in jobs),
+        "files": len(jobs),
+        "finished": sum(1 for j in jobs if j["state"] == "done"),
+        "error": next((j["error"] for j in jobs if j["error"]), ""),
+    }
+
+
+def drop_parts(jobs: list[dict]) -> None:
+    for job in jobs:
+        if job["state"] != "done":
+            try:
+                job["part"].unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def write_part(part: Path, offset: int, source, length: int) -> int:
+    part.parent.mkdir(parents=True, exist_ok=True)
+    remaining = length
+    with open(part, "r+b" if part.exists() else "wb") as f:
+        f.seek(offset)
+        f.truncate()
+        while remaining > 0:
+            try:
+                chunk = source.read(min(1 << 20, remaining))
+            except (ConnectionError, TimeoutError):
+                break
+            if not chunk:
+                break
+            f.write(chunk)
+            remaining -= len(chunk)
+    return length - remaining
+
+
+def zip_entries(items: list[dict]) -> list[tuple[str, str]]:
+    seen, entries = set(), []
+    for item in items:
+        for f in item["files"]:
+            if not Path(f["path"]).is_file():
+                continue
+            head, _, leaf = f["rel"].rpartition("/")
+            stem, ext = os.path.splitext(leaf)
+            name, n = f["rel"], 2
+            while name.lower() in seen:
+                name = f"{head}/{stem} ({n}){ext}" if head else f"{stem} ({n}){ext}"
+                n += 1
+            seen.add(name.lower())
+            entries.append((name, f["path"]))
+    return entries
+
+
+class StreamSink:
+    def __init__(self, out):
+        self.out = out
+
+    def write(self, data) -> int:
+        self.out.write(data)
+        return len(data)
+
+    def flush(self):
+        self.out.flush()
+
+
+def room_whatsapp_message(url: str, code: str, host: str) -> str:
+    return (
+        "🔁 *Sala de troca do Salvaí*\n\n"
+        f"{host} abriu uma sala para vocês trocarem arquivos e pastas.\n\n"
+        f"1. Abra: {url}\n"
+        f"2. Digite o código: *{code}*\n\n"
+        "Funciona no navegador do celular ou do PC, sem instalar nada. "
+        "Se você tem o Salvaí, também dá para entrar pelo botão Sala de troca.\n"
+        "⚠️ O link para de funcionar quando a sala fecha."
+    )
+
+
+class RoomBase:
+    role = ""
+
+    def __init__(self, api: "Api"):
+        self.api = api
+        self.lock = threading.RLock()
+        self.phase, self.error, self.reason = "idle", "", ""
+        self.name = ""
+        self.jobs: dict[str, dict] = {}
+
+    @property
+    def active(self) -> bool:
+        return self.phase in ("starting", "joining", "pending", "open")
+
+    def item_jobs(self, item_id: str) -> list[dict]:
+        return [j for j in self.jobs.values() if j["item"] == item_id]
+
+    def item_root(self, item_id: str) -> Path | None:
+        jobs = self.item_jobs(item_id)
+        return jobs[0]["root"] if jobs else None
+
+
+class Room(RoomBase):
+    role = "host"
+
+    def __init__(self, api: "Api"):
+        super().__init__(api)
+        self.server, self.tunnel = None, None
+        self.step, self.progress = "", None
+        self.url = self.public_host = self.code = ""
+        self.sessions: dict[str, dict] = {}
+        self.revoked: set[str] = set()
+        self.failures: dict[str, list[float]] = {}
+        self.join_failures: deque = deque()
+        self.items: dict[str, dict] = {}
+        self.busy, self.last_activity = 0, 0.0
+
+    def start(self, name: str):
+        with self.lock:
+            if self.active:
+                return
+            self.name = clean_label(name, socket.gethostname())
+            self.phase, self.step, self.error, self.reason = "starting", "Preparando a sala…", "", ""
+        threading.Thread(target=self._open, daemon=True).start()
+
+    def _progress(self, fraction: float):
+        self.progress = round(fraction * 100)
+        self.api._room_changed()
+
+    def _set_step(self, text: str):
+        self.step, self.progress = text, None
+        self.api._room_changed()
+
+    def _open(self):
+        try:
+            self._set_step("Baixando o conector da Cloudflare (só na primeira vez)…")
+            exe = ensure_cloudflared(self._progress)
+            self._set_step("Abrindo o link público…")
+            self._serve()
+            self.tunnel = Tunnel()
+            url = self.tunnel.start(self.server.server_address[1], exe)
+            self.public_host = urllib.parse.urlparse(url).netloc
+            self._set_step("Testando o link…")
+            wait_public(url)
+            with self.lock:
+                cancelled = self.phase != "starting"
+                if not cancelled:
+                    self.url, self.code = url, new_room_code()
+                    self.phase, self.last_activity = "open", time.time()
+            if cancelled:
+                return self._shutdown()
+            threading.Thread(target=self._watch, daemon=True).start()
+        except Exception as e:
+            self._shutdown()
+            if self.phase == "starting":
+                self.phase, self.error = "error", clean_error(e)
+        self.api._room_changed()
+
+    def _serve(self):
+        room = self
+
+        class Handler(BaseHTTPRequestHandler):
+            timeout = 120
+
+            def log_message(self, *args):
+                pass
+
+            def _json(self, code: int, payload, cookie: str = ""):
+                body = json.dumps(payload, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                if cookie:
+                    self.send_header("Set-Cookie", f"sala={cookie}; Path=/; Secure; HttpOnly; SameSite=Strict")
+                for name, value in SECURITY_HEADERS.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+
+            def _trusted(self) -> bool:
+                origin = self.headers.get("Origin")
+                if origin and origin != f"{ROOM_SCHEME}://{room.public_host}":
+                    return False
+                return self.headers.get("X-Sala") == "1"
+
+            def _handle(self, method: str):
+                ip = (self.headers.get("Cf-Connecting-Ip") or self.client_address[0]).strip()
+                host = (self.headers.get("Host") or "").lower()
+                if not room.public_host or host != room.public_host:
+                    return self._json(403, {"error": "Endereço inválido."})
+                if room.blocked(ip):
+                    return self._json(429, {"error": "Muitas tentativas. Espere alguns minutos."})
+                if method in ("POST", "PUT") and not self._trusted():
+                    return self._json(403, {"error": "Abra a sala pelo link que te mandaram."})
+                url = urllib.parse.urlparse(self.path)
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+                try:
+                    room.route(self, method, url.path, query, ip)
+                except (ConnectionError, TimeoutError):
+                    pass
+                except PermissionError as e:
+                    self._json(403, {"error": str(e)})
+                except ValueError as e:
+                    self._json(400, {"error": str(e)})
+                except Exception:
+                    self._json(500, {"error": "Algo deu errado no computador de quem criou a sala."})
+
+            def do_GET(self):
+                self._handle("GET")
+
+            def do_HEAD(self):
+                self._handle("HEAD")
+
+            def do_POST(self):
+                self._handle("POST")
+
+            def do_PUT(self):
+                self._handle("PUT")
+
+        self.server = ExclusiveHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def blocked(self, ip: str) -> bool:
+        now = time.time()
+        recent = [t for t in self.failures.get(ip, []) if now - t < 600]
+        self.failures[ip] = recent
+        return len(recent) >= 10
+
+    def fail(self, ip: str):
+        self.failures.setdefault(ip, []).append(time.time())
+
+    def touch(self):
+        self.last_activity = time.time()
+
+    def route(self, h, method: str, path: str, query: dict, ip: str):
+        if method in ("GET", "HEAD") and path in ROOM_PAGES:
+            return self.page(h, ROOM_PAGES[path], method == "HEAD")
+        if method == "GET" and path == "/api/ping":
+            return h._json(200, {"ok": True})
+        match = re.search(r"(?:^|;\s*)sala=([\w-]+)", h.headers.get("Cookie") or "")
+        sid = match.group(1) if match else ""
+        session = self.sessions.get(sid)
+        if method == "GET" and path == "/api/me":
+            state = session["state"] if session else "revoked" if sid in self.revoked else "none"
+            return h._json(200, {"state": state, "host": self.name, "name": session["name"] if session else ""})
+        if method == "POST" and path == "/api/join":
+            return self.join(h, ip, session)
+        if not session or session["state"] != "approved":
+            self.fail(ip)
+            if sid in self.revoked:
+                raise PermissionError("Quem criou a sala tirou você dela.")
+            raise PermissionError("Entre na sala com o código para continuar.")
+        session["seen"] = time.time()
+        if method == "GET" and path == "/api/state":
+            return h._json(200, self.guest_state(session))
+        self.touch()
+        if method == "GET" and path == "/api/files":
+            item = self.host_item(query.get("item", ""))
+            return h._json(200, {"files": [{"rel": f["rel"], "size": f["size"]} for f in item["files"]]})
+        if method == "POST" and path == "/api/offer":
+            return h._json(200, {"ids": self.offer(session, read_json_body(h, ROOM_OFFER_BODY).get("items"))})
+        if method == "POST" and path == "/api/unoffer":
+            self.remove_item(str(read_json_body(h).get("id", "")), session["id"])
+            return h._json(200, {"ok": True})
+        if method == "PUT" and path == "/api/upload":
+            return h._json(*self.receive(h, session, query))
+        if method in ("GET", "HEAD") and path == "/api/file":
+            item = self.host_item(query.get("item", ""))
+            index = int(query.get("f", "0"))
+            if not 0 <= index < len(item["files"]):
+                raise ValueError("Não achei esse arquivo.")
+            target = Path(item["files"][index]["path"])
+            if not target.is_file():
+                raise ValueError("Esse arquivo não está mais no computador de quem criou a sala.")
+            self.mark_fetched(item, session)
+            return self.serving(lambda: send_file(h, target, query.get("dl") == "1", method == "HEAD"))
+        if method == "GET" and path == "/api/zip":
+            items = [self.host_item(i) for i in query.get("items", "").split(",") if i]
+            if not items:
+                raise ValueError("Escolha o que baixar.")
+            for item in items:
+                self.mark_fetched(item, session)
+            return self.serving(lambda: self.send_zip(h, items))
+        if method == "POST" and path == "/api/leave":
+            self.kick(session["id"], revoke=False)
+            return h._json(200, {"ok": True})
+        h._json(404, {"error": "não encontrado"})
+
+    def page(self, h, name: str, head: bool):
+        target = BASE / "ui" / "room" / name
+        if name != "index.html":
+            return send_file(h, target, as_attachment=False, head=head)
+        page = target.read_bytes()
+        h.send_response(200)
+        h.send_header("Content-Type", "text/html; charset=utf-8")
+        h.send_header("Content-Length", str(len(page)))
+        h.send_header("Cache-Control", "no-store")
+        h.send_header("Content-Security-Policy", MOBILE_CSP)
+        for key, value in SECURITY_HEADERS.items():
+            h.send_header(key, value)
+        h.end_headers()
+        if not head:
+            h.wfile.write(page)
+
+    def join(self, h, ip: str, session: dict | None):
+        body = read_json_body(h)
+        if session:
+            return h._json(200, {"state": session["state"]})
+        now = time.time()
+        with self.lock:
+            while self.join_failures and now - self.join_failures[0] > 600:
+                self.join_failures.popleft()
+            if len(self.join_failures) >= 60:
+                return h._json(429, {"error": "A sala recebeu tentativas erradas demais. Peça um link novo."})
+            if not secrets.compare_digest(normalize_code(body.get("code")), self.code):
+                self.fail(ip)
+                self.join_failures.append(now)
+                return h._json(403, {"error": "Código errado. Confira com quem te mandou o link."})
+            if sum(1 for s in self.sessions.values() if s["state"] == "pending") >= ROOM_MAX_PENDING:
+                return h._json(429, {"error": "Tem muita gente esperando para entrar. Tente daqui a pouco."})
+            sid = secrets.token_urlsafe(24)
+            agent = h.headers.get("User-Agent") or ""
+            session = {
+                "id": secrets.token_hex(6),
+                "name": clean_label(body.get("name"), device_name(agent)),
+                "device": device_name(agent),
+                "state": "pending",
+                "since": now,
+                "seen": now,
+            }
+            self.sessions[sid] = session
+        self.touch()
+        self.api._room_event("join", session["name"])
+        h._json(200, {"state": "pending"}, cookie=sid)
+
+    def approve(self, person_id: str):
+        with self.lock:
+            for session in self.sessions.values():
+                if session["id"] == person_id and session["state"] == "pending":
+                    session["state"], session["seen"] = "approved", time.time()
+        self.touch()
+        self.api._room_changed()
+
+    def kick(self, person_id: str, revoke: bool = True):
+        with self.lock:
+            found = [sid for sid, s in self.sessions.items() if s["id"] == person_id]
+            for sid in found:
+                del self.sessions[sid]
+                if revoke:
+                    self.revoked.add(sid)
+            gone = [item_id for item_id, item in self.items.items() if item["owner"] == person_id]
+        for item_id in gone:
+            self.remove_item(item_id, person_id)
+        self.api._room_changed()
+
+    def host_item(self, item_id: str) -> dict:
+        item = self.items.get(item_id)
+        if not item or item["owner"] != "host":
+            raise ValueError("Não achei esse arquivo.")
+        return item
+
+    def mark_fetched(self, item: dict, session: dict):
+        if session["name"] not in item["fetched"]:
+            item["fetched"].append(session["name"])
+            self.api._room_changed()
+
+    def serving(self, action):
+        with self.lock:
+            self.busy += 1
+        try:
+            action()
+        finally:
+            with self.lock:
+                self.busy -= 1
+            self.touch()
+
+    def send_zip(self, h, items: list[dict]):
+        name = clean_name(items[0]["name"] if len(items) == 1 else f"Sala de {self.name}")
+        fallback = re.sub(r"[^ -~]", "_", name).replace('"', "")
+        h.send_response(200)
+        h.send_header("Content-Type", "application/zip")
+        h.send_header("Cache-Control", "no-store")
+        h.send_header(
+            "Content-Disposition",
+            f"attachment; filename=\"{fallback}.zip\"; filename*=UTF-8''{urllib.parse.quote(name)}.zip",
+        )
+        for key, value in SECURITY_HEADERS.items():
+            h.send_header(key, value)
+        h.end_headers()
+        with zipfile.ZipFile(StreamSink(h.wfile), "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+            for arcname, source in zip_entries(items):
+                archive.write(source, arcname)
+
+    def offer(self, session: dict, entries) -> list[str]:
+        if not isinstance(entries, list) or not 1 <= len(entries) <= ROOM_OFFER_BATCH:
+            raise ValueError("Nada para adicionar.")
+        parsed = [parse_offer(e) for e in entries]
+        ids = []
+        with self.lock:
+            mine = [i for i in self.items.values() if i["owner"] == session["id"]]
+            for entry in parsed:
+                item = make_item(session["id"], entry["kind"], entry["name"], entry["files"])
+                same = next((i for i in mine if item_signature(i) == item_signature(item)), None)
+                if same:
+                    ids.append(same["id"])
+                    continue
+                if len(mine) >= ROOM_MAX_ITEMS:
+                    raise ValueError("A sala já tem itens demais.")
+                self.items[item["id"]] = item
+                mine.append(item)
+                ids.append(item["id"])
+        self.api._room_changed()
+        return ids
+
+    def add_paths(self, paths: list[str]):
+        for path in paths:
+            entry = scan_local(Path(path))
+            item = make_item("host", entry["kind"], entry["name"], entry["files"])
+            with self.lock:
+                if sum(1 for i in self.items.values() if i["owner"] == "host") >= ROOM_MAX_ITEMS:
+                    raise ValueError("A sala já tem itens demais.")
+                self.items[item["id"]] = item
+        self.touch()
+        self.api._room_changed()
+
+    def remove_item(self, item_id: str, owner: str = "host") -> bool:
+        with self.lock:
+            item = self.items.get(item_id)
+            if not item or item["owner"] != owner:
+                return False
+            del self.items[item_id]
+            jobs = self.item_jobs(item_id)
+            for job in jobs:
+                del self.jobs[job["id"]]
+        drop_parts(jobs)
+        self.api._room_changed()
+        return True
+
+    def download(self, ids, dest: Path) -> int:
+        count = 0
+        with self.lock:
+            chosen = [i for i in self.items.values() if i["owner"] != "host" and (ids == "*" or i["id"] in ids)]
+            for item in chosen:
+                count += 1
+                old = self.item_jobs(item["id"])
+                if restart_jobs(old):
+                    continue
+                for job in old:
+                    del self.jobs[job["id"]]
+                for index, (target, root) in enumerate(plan_targets(item, dest)):
+                    job = new_job(item, index, target, root)
+                    self.jobs[job["id"]] = job
+                    if not job["size"]:
+                        finish_job(job)
+        self.touch()
+        self.api._room_changed()
+        return count
+
+    def receive(self, h, session: dict, query: dict) -> tuple[int, dict]:
+        length = int(h.headers.get("Content-Length") or -1)
+        if not 0 <= length <= ROOM_MAX_CHUNK:
+            raise ValueError("Pedaço de arquivo grande demais.")
+        offset = int(query.get("offset", "-1"))
+        with self.lock:
+            job = self.jobs.get(query.get("t", ""))
+            if not job or job["owner"] != session["id"] or job["state"] not in ("waiting", "sending"):
+                raise ValueError("Esse envio não existe mais.")
+            if job.get("writing") or offset != job["received"] or offset + length > job["size"]:
+                return 409, {"received": job["received"]}
+            job["writing"], job["state"] = True, "sending"
+        try:
+            written = write_part(job["part"], offset, h.rfile, length)
+        except OSError:
+            job["state"], job["error"] = "error", "Não deu para gravar no disco."
+            raise
+        finally:
+            job["writing"] = False
+        with self.lock:
+            job["received"] = offset + written
+            if job["received"] == job["size"]:
+                finish_job(job)
+        self.api._room_changed()
+        return 200, {"received": job["received"]}
+
+    def guest_state(self, session: dict) -> dict:
+        with self.lock:
+            items = [public_item(i) for i in self.items.values() if i["owner"] == "host"]
+            mine = [
+                dict(public_item(i), progress=job_progress(self.item_jobs(i["id"])))
+                for i in self.items.values()
+                if i["owner"] == session["id"]
+            ]
+            requests = [
+                {"id": j["id"], "item": j["item"], "f": j["f"], "offset": j["received"], "size": j["size"]}
+                for j in self.jobs.values()
+                if j["owner"] == session["id"] and j["state"] in ("waiting", "sending")
+            ]
+        return {
+            "host": self.name,
+            "me": {"id": session["id"], "name": session["name"]},
+            "items": items,
+            "mine": mine,
+            "requests": requests,
+            "chunk": ROOM_CHUNK,
+        }
+
+    def status(self) -> dict:
+        now = time.time()
+        with self.lock:
+            people = [
+                {
+                    "id": s["id"],
+                    "name": s["name"],
+                    "device": s["device"],
+                    "state": s["state"],
+                    "since": s["since"],
+                    "online": now - s["seen"] < 20,
+                }
+                for s in sorted(self.sessions.values(), key=lambda s: s["since"])
+            ]
+            names = {s["id"]: s["name"] for s in self.sessions.values()}
+            mine = [
+                dict(public_item(i), fetched=list(i["fetched"])) for i in self.items.values() if i["owner"] == "host"
+            ]
+            theirs = [
+                dict(public_item(i), owner=names.get(i["owner"], ""), progress=job_progress(self.item_jobs(i["id"])))
+                for i in self.items.values()
+                if i["owner"] != "host"
+            ]
+        return {
+            "role": "host",
+            "phase": self.phase,
+            "step": self.step,
+            "progress": self.progress,
+            "error": self.error,
+            "reason": self.reason,
+            "name": self.name,
+            "host": self.name,
+            "url": self.url,
+            "code": format_code(self.code),
+            "people": people,
+            "mine": mine,
+            "theirs": theirs,
+        }
+
+    def _watch(self):
+        while True:
+            time.sleep(ROOM_TICK)
+            if self.phase != "open":
+                return
+            if not self.tunnel.alive():
+                return self.close("A conexão com a Cloudflare caiu e a sala fechou. Crie uma nova para continuar.")
+            if not self.busy and time.time() - self.last_activity > ROOM_IDLE_LIMIT:
+                return self.close("A sala fechou sozinha depois de 30 minutos sem uso.")
+
+    def close(self, reason: str = ""):
+        with self.lock:
+            if self.phase in ("idle", "closed"):
+                return
+            self.phase, self.reason = ("closed" if reason else "idle"), reason
+            jobs = list(self.jobs.values())
+            self.sessions.clear()
+            self.items.clear()
+            self.jobs.clear()
+        self._shutdown()
+        drop_parts(jobs)
+        if reason:
+            self.api._room_event("closed", reason)
+        self.api._room_changed()
+
+    def _shutdown(self):
+        tunnel, self.tunnel = self.tunnel, None
+        server, self.server = self.server, None
+        if tunnel:
+            tunnel.stop()
+        if server:
+            server.shutdown()
+            server.server_close()
+
+
+class RoomError(Exception):
+    def __init__(self, status: int, message: str, data: dict | None = None):
+        super().__init__(message)
+        self.status, self.data = status, data or {}
+
+
+class RoomClient(RoomBase):
+    role = "guest"
+
+    def __init__(self, api: "Api"):
+        super().__init__(api)
+        self.base = self.sid = self.host = ""
+        self.state: dict = {}
+        self.local: dict[str, list[str]] = {}
+        self.sending: set[str] = set()
+        self.uploads: deque = deque()
+
+    def request(self, method: str, path: str, body=None, data: bytes | None = None, headers=None, raw=False):
+        head = {"User-Agent": f"Salvai/{APP_VERSION}", "X-Sala": "1"}
+        if self.sid:
+            head["Cookie"] = f"sala={self.sid}"
+        if body is not None:
+            data = json.dumps(body).encode()
+            head["Content-Type"] = "application/json"
+        head.update(headers or {})
+        req = urllib.request.Request(self.base + path, data=data, method=method, headers=head)
+        try:
+            response = urllib.request.urlopen(req, timeout=60)
+        except urllib.error.HTTPError as e:
+            try:
+                info = json.loads(e.read() or b"{}")
+            except ValueError:
+                info = {}
+            raise RoomError(e.code, info.get("error") or f"a sala respondeu {e.code}", info) from None
+        if raw:
+            return response
+        with response:
+            cookie = re.search(r"sala=([\w-]+)", response.headers.get("Set-Cookie") or "")
+            if cookie:
+                self.sid = cookie.group(1)
+            return json.loads(response.read() or b"{}")
+
+    def join(self, link: str, code: str, name: str):
+        match = ROOM_LINK_RE.fullmatch((link or "").strip())
+        if not match:
+            raise ValueError("Cole o link da sala que te mandaram (ele termina em trycloudflare.com).")
+        if not normalize_code(code):
+            raise ValueError("Digite o código da sala.")
+        with self.lock:
+            self.base = match.group(1)
+            self.name = clean_label(name, socket.gethostname())
+            self.phase, self.error, self.reason = "joining", "", ""
+        threading.Thread(target=self._run, args=(code,), daemon=True).start()
+
+    def _run(self, code: str):
+        try:
+            me = self._knock(code)
+            self.phase = "pending"
+            self.api._room_changed()
+            while me["state"] == "pending" and self.phase == "pending":
+                time.sleep(ROOM_POLL)
+                me = self.request("GET", "/api/me")
+            if self.phase != "pending":
+                return
+            if me["state"] != "approved":
+                raise RuntimeError("Quem criou a sala não deixou você entrar.")
+            self.host, self.phase = me.get("host", ""), "open"
+            self.refresh()
+            self.api._room_changed()
+            threading.Thread(target=self._uploader, daemon=True).start()
+            threading.Thread(target=self._downloader, daemon=True).start()
+            self._sync()
+        except Exception as e:
+            if self.active:
+                self.phase, self.error = "error", clean_error(e)
+                self._cleanup()
+                self.api._room_changed()
+
+    def _knock(self, code: str) -> dict:
+        deadline = time.time() + ROOM_JOIN_RETRY
+        while True:
+            try:
+                return self.request("POST", "/api/join", {"name": self.name, "code": code})
+            except OSError:
+                if time.time() > deadline or self.phase != "joining":
+                    raise
+                time.sleep(2)
+
+    def refresh(self):
+        state = self.request("GET", "/api/state")
+        with self.lock:
+            self.state, self.host = state, state["host"]
+            for req in state["requests"]:
+                if req["id"] not in self.sending and req["item"] in self.local:
+                    self.sending.add(req["id"])
+                    self.uploads.append(req)
+
+    def _sync(self):
+        misses = 0
+        while self.phase == "open":
+            try:
+                self.refresh()
+                misses = 0
+            except RoomError as e:
+                if e.status == 403:
+                    return self._end("Quem criou a sala tirou você dela.")
+                misses += 1
+            except OSError:
+                misses += 1
+            if misses >= 8:
+                return self._end("A sala não responde mais. Ela pode ter sido fechada.")
+            time.sleep(ROOM_POLL)
+
+    def _uploader(self):
+        while self.phase == "open":
+            try:
+                req = self.uploads.popleft()
+            except IndexError:
+                time.sleep(0.3)
+                continue
+            try:
+                self._upload(req)
+            except Exception:
+                pass
+            finally:
+                self.sending.discard(req["id"])
+
+    def _upload(self, req: dict):
+        path = self.local[req["item"]][req["f"]]
+        offset, chunk = req["offset"], self.state.get("chunk", ROOM_CHUNK)
+        with open(path, "rb") as f:
+            while offset < req["size"] and self.phase == "open":
+                f.seek(offset)
+                data = f.read(min(chunk, req["size"] - offset))
+                if not data:
+                    raise RuntimeError("o arquivo mudou enquanto era enviado")
+                try:
+                    reply = self.request(
+                        "PUT",
+                        f"/api/upload?t={req['id']}&offset={offset}",
+                        data=data,
+                        headers={"Content-Type": "application/octet-stream"},
+                    )
+                    offset = reply["received"]
+                except RoomError as e:
+                    if e.status != 409:
+                        raise
+                    offset = e.data["received"]
+
+    def _downloader(self):
+        while self.phase == "open":
+            job = next((j for j in list(self.jobs.values()) if j["state"] == "waiting"), None)
+            if not job:
+                time.sleep(0.3)
+                continue
+            try:
+                self._fetch(job)
+            except Exception as e:
+                job["state"], job["error"] = "error", clean_error(e)
+            self.api._room_changed()
+
+    def _fetch(self, job: dict):
+        job["state"] = "sending"
+        offset = job["part"].stat().st_size if job["part"].exists() else 0
+        headers = {"Range": f"bytes={offset}-"} if offset else None
+        response = self.request("GET", f"/api/file?item={job['item']}&f={job['f']}", headers=headers, raw=True)
+        with response:
+            if response.status != 206:
+                offset = 0
+            job["part"].parent.mkdir(parents=True, exist_ok=True)
+            with open(job["part"], "r+b" if offset else "wb") as out:
+                out.seek(offset)
+                out.truncate()
+                job["received"] = offset
+                while self.phase == "open" and (chunk := response.read(1 << 20)):
+                    out.write(chunk)
+                    job["received"] += len(chunk)
+        if job["received"] >= job["size"]:
+            finish_job(job)
+        elif self.phase == "open":
+            raise RuntimeError("A conexão caiu no meio. Clique em baixar de novo para continuar.")
+
+    def add_paths(self, paths: list[str]):
+        entries = [scan_local(Path(p)) for p in paths]
+        for start in range(0, len(entries), ROOM_OFFER_BATCH):
+            batch = entries[start : start + ROOM_OFFER_BATCH]
+            offers = [
+                {
+                    "kind": e["kind"],
+                    "name": e["name"],
+                    "files": [{"rel": f["rel"], "size": f["size"]} for f in e["files"]],
+                }
+                for e in batch
+            ]
+            ids = self.request("POST", "/api/offer", {"items": offers})["ids"]
+            with self.lock:
+                for item_id, entry in zip(ids, batch, strict=True):
+                    self.local[item_id] = [f["path"] for f in entry["files"]]
+        self.refresh()
+
+    def remove_item(self, item_id: str, owner: str = "") -> bool:
+        self.request("POST", "/api/unoffer", {"id": item_id})
+        with self.lock:
+            self.local.pop(item_id, None)
+        self.refresh()
+        return True
+
+    def download(self, ids, dest: Path) -> int:
+        count = 0
+        for item in [i for i in self.state.get("items", []) if ids == "*" or i["id"] in ids]:
+            count += 1
+            with self.lock:
+                if restart_jobs(self.item_jobs(item["id"])):
+                    continue
+            files = self.request("GET", f"/api/files?item={item['id']}")["files"]
+            full = dict(item, owner="host", files=files)
+            with self.lock:
+                for job in self.item_jobs(item["id"]):
+                    del self.jobs[job["id"]]
+                for index, (target, root) in enumerate(plan_targets(full, dest)):
+                    job = new_job(full, index, target, root)
+                    self.jobs[job["id"]] = job
+                    if not job["size"]:
+                        finish_job(job)
+        return count
+
+    def status(self) -> dict:
+        state = self.state
+        with self.lock:
+            theirs = [
+                dict(i, owner=self.host, progress=job_progress(self.item_jobs(i["id"]))) for i in state.get("items", [])
+            ]
+            mine = [dict(i, local=i["id"] in self.local) for i in state.get("mine", [])]
+        return {
+            "role": "guest",
+            "phase": self.phase,
+            "step": "",
+            "progress": None,
+            "error": self.error,
+            "reason": self.reason,
+            "name": self.name,
+            "host": self.host,
+            "url": self.base,
+            "code": "",
+            "people": [],
+            "mine": mine,
+            "theirs": theirs,
+        }
+
+    def _cleanup(self):
+        with self.lock:
+            jobs = [j for j in self.jobs.values() if j["state"] != "done"]
+            for job in jobs:
+                job["state"], job["error"] = "error", "interrompido"
+        drop_parts(jobs)
+
+    def _end(self, reason: str):
+        with self.lock:
+            if not self.active:
+                return
+            self.phase, self.reason = "closed", reason
+        self._cleanup()
+        self.api._room_event("closed", reason)
+
+    def close(self, reason: str = ""):
+        with self.lock:
+            was = self.phase in ("pending", "open")
+            self.phase = "idle"
+        if was:
+            try:
+                self.request("POST", "/api/leave", {})
+            except Exception:
+                pass
+        self._cleanup()
+        self.api._room_changed()
+
+
 def fresh_env() -> dict:
     env = dict(os.environ)
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
@@ -1769,6 +2932,7 @@ class Api:
         self._ready = False
         self._login_windows: dict[str, object] = {}
         self._phone = PhoneServer(self)
+        self._room: RoomBase | None = None
         self._peek_cache: dict[str, tuple[float, dict]] = {}
         self._files_cache: tuple[float, list] | None = None
         self._saved = load_saved()
@@ -1872,7 +3036,7 @@ class Api:
         if self._quitting:
             return True
         busy = self._active_count()
-        if self._tray.icon is None or (not busy and not self._phone.running):
+        if self._tray.icon is None or (not busy and not self._phone.running and not self._room_active()):
             return True
         threading.Thread(target=self._hide_to_tray, args=(busy,), daemon=True).start()
         return False
@@ -1887,6 +3051,8 @@ class Api:
             )
         if self._phone.running:
             reasons.append("o modo celular está ligado")
+        if self._room_active():
+            reasons.append("a sala de troca está aberta")
         self._tray.refresh()
         self._tray.notify(
             "O Salvaí continua aberto aqui",
@@ -1927,12 +3093,15 @@ class Api:
     def _quit(self):
         self._quitting = True
         self._phone.stop()
+        self.room_close()
         self._tray.stop()
         self._window.destroy()
 
     def _on_main_closed(self):
         self._tray.stop()
         self._phone.stop()
+        if self._room:
+            self._room.close()
         for win in list(self._login_windows.values()):
             try:
                 win.destroy()
@@ -2153,10 +3322,128 @@ class Api:
         status = self._phone.status()
         if not status.get("on"):
             return {"ok": False}
-        text = urllib.parse.quote(whatsapp_message(status["url"], self._phone.network or {}))
+        return self._open_whatsapp(whatsapp_message(status["url"], self._phone.network or {}))
+
+    def _open_whatsapp(self, message: str) -> dict:
+        text = urllib.parse.quote(message)
         desktop = whatsapp_installed()
         os.startfile(f"whatsapp://send?text={text}" if desktop else f"https://web.whatsapp.com/send?text={text}")
         return {"ok": True, "app": "desktop" if desktop else "web"}
+
+    def _room_changed(self):
+        try:
+            self._window.run_js("window.app && app.roomChanged && app.roomChanged()")
+        except Exception:
+            pass
+
+    def _room_event(self, kind: str, text: str):
+        if kind == "join":
+            self._tray.notify(
+                "Alguém quer entrar na sala",
+                f"{text} pediu para entrar na sua sala de troca. Abra o Salvaí para aprovar.",
+            )
+        else:
+            self._tray.notify("Sala de troca fechada", text)
+        self._tray.refresh()
+        self._room_changed()
+
+    def _room_active(self) -> bool:
+        return bool(self._room and self._room.active)
+
+    def _remember_room_name(self, name: str):
+        label = clean_label(name)
+        if label and label != self._cfg.get("room_name"):
+            self._cfg["room_name"] = label
+            save_config(self._cfg)
+
+    def room_status(self) -> dict:
+        if self._room:
+            return self._room.status()
+        return {"role": None, "phase": "idle", "name": self._cfg.get("room_name") or os.getenv("USERNAME") or ""}
+
+    def room_create(self, name: str) -> dict:
+        self._remember_room_name(name)
+        if self._room:
+            self._room.close()
+        self._room = Room(self)
+        self._room.start(name)
+        self._tray.refresh()
+        return self.room_status()
+
+    def room_join(self, link: str, code: str, name: str) -> dict:
+        self._remember_room_name(name)
+        client = RoomClient(self)
+        try:
+            client.join(link, code, name)
+        except ValueError as e:
+            return dict(self.room_status(), notice=str(e))
+        if self._room:
+            self._room.close()
+        self._room = client
+        return self.room_status()
+
+    def room_close(self) -> dict:
+        if self._room:
+            self._room.close()
+            self._room = None
+        self._tray.refresh()
+        return self.room_status()
+
+    def _room_call(self, action) -> dict:
+        if not self._room or self._room.phase != "open":
+            return self.room_status()
+        try:
+            action(self._room)
+        except Exception as e:
+            return dict(self.room_status(), notice=clean_error(e))
+        return self.room_status()
+
+    def room_add(self, kind: str) -> dict:
+        if not self._room or self._room.phase != "open":
+            return self.room_status()
+        folder = kind == "folder"
+        result = self._window.create_file_dialog(
+            webview.FileDialog.FOLDER if folder else webview.FileDialog.OPEN,
+            directory=self._out_dir,
+            allow_multiple=not folder,
+        )
+        if not result:
+            return self.room_status()
+        paths = [result] if isinstance(result, str) else list(result)
+        return self._room_call(lambda room: room.add_paths(paths))
+
+    def room_remove(self, item_id: str) -> dict:
+        return self._room_call(lambda room: room.remove_item(item_id))
+
+    def room_download(self, ids) -> dict:
+        if not self._room or self._room.phase != "open":
+            return self.room_status()
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=self._out_dir)
+        if not result:
+            return self.room_status()
+        dest = Path(result[0] if isinstance(result, (list, tuple)) else result)
+        return self._room_call(lambda room: room.download(ids, dest))
+
+    def room_approve(self, person_id: str) -> dict:
+        return self._room_call(lambda room: room.approve(person_id))
+
+    def room_kick(self, person_id: str) -> dict:
+        return self._room_call(lambda room: room.kick(person_id))
+
+    def room_reveal(self, item_id: str):
+        root = self._room.item_root(item_id) if self._room else None
+        if not root or not root.exists():
+            return
+        if root.is_dir():
+            os.startfile(root)
+        else:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(root)])
+
+    def room_share_whatsapp(self) -> dict:
+        status = self.room_status()
+        if status["role"] != "host" or status["phase"] != "open":
+            return {"ok": False}
+        return self._open_whatsapp(room_whatsapp_message(status["url"], status["code"], status["name"]))
 
     def open_network_settings(self):
         kind = (self._phone.network or {}).get("kind")

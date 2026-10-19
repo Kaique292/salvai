@@ -7,7 +7,7 @@ export default defineConfig({
     restoreMocks: true,
     coverage: {
       provider: "v8",
-      include: ["src/ui/app.js", "src/ui/mobile/mobile.js"],
+      include: ["src/ui/app.js", "src/ui/mobile/mobile.js", "src/ui/room/room.js"],
       reporter: ["text", "json-summary"],
       reportsDirectory: "build/coverage-js",
       thresholds: { lines: 100, functions: 100, branches: 100, statements: 100 },
