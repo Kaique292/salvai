@@ -130,6 +130,8 @@ def device_cookie(phone):
 
 def phone_call(phone, method, path, headers=None, body=None, host=None, cookie=True):
     all_headers = {"Cookie": device_cookie(phone)} if cookie is True else {"Cookie": cookie} if cookie else {}
+    if method in ("POST", "PUT"):
+        all_headers["X-Salvai"] = "1"
     all_headers.update(headers or {})
     return http_request(phone.server.server_address[1], method, path, all_headers, body, host)
 
@@ -467,3 +469,158 @@ def test_api_phone_device_controls(api, monkeypatch):
         assert api.phone_clear_history()["history"] == [] and app.load_config()["phone_history"] == []
     finally:
         api.phone_stop()
+
+
+def send_plan(phone, files):
+    status, _, data = phone_call(
+        phone, "POST", "/api/send", {"Content-Type": "application/json"}, json.dumps({"files": files}).encode()
+    )
+    return status, json_body(data)
+
+
+def upload(phone, job_id, offset, chunk):
+    status, _, data = phone_call(phone, "PUT", f"/api/upload?t={job_id}&offset={offset}", {}, chunk)
+    return status, json_body(data)
+
+
+def test_phone_send_to_pc(phone, api, monkeypatch):
+    notes = []
+    monkeypatch.setattr(api._tray, "notify", lambda title, msg: notes.append(msg))
+    status, reply = send_plan(phone, [{"name": "foto.jpg", "size": 6}, {"name": "vazio.txt", "size": 0}])
+    assert status == 200 and reply["chunk"] == app.PHONE_CHUNK
+    photo, empty = reply["uploads"]
+    assert photo["offset"] == 0 and empty["offset"] == 0
+    inbox = Path(api._out_dir, app.PHONE_INBOX)
+    assert (inbox / "vazio.txt").read_bytes() == b"" and notes == []
+    assert phone.incoming() is None
+    assert upload(phone, photo["id"], 0, b"abc") == (200, {"received": 3, "done": False})
+    assert phone.status()["incoming"] == {"files": 1, "done": 3, "total": 6}
+    assert upload(phone, photo["id"], 0, b"abc") == (409, {"received": 3})
+    assert upload(phone, photo["id"], 3, b"defgh") == (409, {"received": 3})
+    status, again = send_plan(phone, [{"name": "foto.jpg", "size": 6}])
+    assert again["uploads"] == [{"id": photo["id"], "offset": 3}]
+    assert upload(phone, photo["id"], 3, b"def") == (200, {"received": 6, "done": True})
+    assert (inbox / "foto.jpg").read_bytes() == b"abcdef"
+    assert notes == ["foto.jpg chegou de iPhone."]
+    assert not list(inbox.glob("*.salvai-part"))
+    received = phone.status()["received"]
+    assert [r["name"] for r in received] == ["foto.jpg", "vazio.txt"]
+    assert set(received[0]) == {"id", "name", "size", "device", "at"} and received[0]["device"] == "iPhone"
+    assert phone.received_file(received[0]["id"]) == inbox / "foto.jpg"
+    (inbox / "vazio.txt").unlink()
+    assert phone.received_file(received[1]["id"]) is None and phone.received_file("x") is None
+    status, reply = send_plan(phone, [{"name": "foto.jpg", "size": 1}, {"name": "foto.jpg", "size": 1}])
+    first, second = reply["uploads"]
+    assert first["id"] != second["id"]
+    assert upload(phone, first["id"], 0, b"1")[1]["done"] is True
+    assert upload(phone, second["id"], 0, b"2")[1]["done"] is True
+    assert notes[-1] == "2 arquivos chegaram de iPhone."
+    assert sorted(p.name for p in inbox.iterdir()) == ["foto (2).jpg", "foto (3).jpg", "foto.jpg"]
+
+
+def test_phone_send_rejects_bad_requests(phone, api, monkeypatch):
+    assert send_plan(phone, [])[0] == 400
+    assert send_plan(phone, "x")[0] == 400
+    assert send_plan(phone, [{"name": "a"}] * (app.PHONE_SEND_BATCH + 1))[0] == 400
+    for bad in ("x", {"name": "a"}, {"name": "a", "size": -1}, {"name": "a", "size": True}, {"size": 1 << 42}):
+        assert send_plan(phone, [bad]) == (400, {"error": "Arquivo inválido."})
+    status, reply = send_plan(phone, [{"name": "../../x:y?.bin", "size": 2}])
+    job = phone.uploads[reply["uploads"][0]["id"]]
+    assert job["dest"] == Path(api._out_dir, app.PHONE_INBOX, ".._.._x_y_.bin")
+    disk_usage = app.shutil.disk_usage
+    monkeypatch.setattr(app.shutil, "disk_usage", lambda path: types.SimpleNamespace(free=1))
+    assert "espaço" in send_plan(phone, [{"name": "b", "size": 5}])[1]["error"]
+    monkeypatch.setattr(app.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(app, "PHONE_MAX_UPLOADS", 1)
+    assert "demais" in send_plan(phone, [{"name": "c", "size": 5}])[1]["error"]
+    assert upload(phone, "nao-existe", 0, b"1")[0] == 400
+    other = phone.open_session("127.0.0.1", "Mozilla/5.0 (Linux; Android 14)")
+    status, _, data = phone_call(
+        phone, "PUT", f"/api/upload?t={job['id']}&offset=0", {}, b"1", cookie=f"salvai={other}"
+    )
+    assert status == 400 and "não existe" in json_body(data)["error"]
+    big = app.PHONE_MAX_CHUNK + 1
+    status, _, data = phone_call(phone, "PUT", f"/api/upload?t={job['id']}&offset=0", {"Content-Length": str(big)}, b"")
+    assert status == 400 and "grande" in json_body(data)["error"]
+    assert upload(phone, job["id"], 0, b"") == (200, {"received": 0, "done": False})
+    with pytest.raises(ValueError):
+        phone.receive(types.SimpleNamespace(headers={}), phone.session_for(device_cookie(phone)[7:]), {})
+    job["writing"] = True
+    assert upload(phone, job["id"], 0, b"1") == (409, {"received": 0})
+    job["writing"] = False
+    monkeypatch.setattr(app, "write_part", lambda *a: (_ for _ in ()).throw(PermissionError("negado")))
+    status, reply = upload(phone, job["id"], 0, b"1")
+    assert status == 400 and "gravar" in reply["error"] and job["writing"] is False
+
+
+def test_phone_send_needs_csrf_header(phone):
+    port = phone.server.server_address[1]
+    cookie = {"Cookie": device_cookie(phone)}
+    for method, path in (("POST", "/api/send"), ("PUT", "/api/upload?t=x&offset=0"), ("POST", "/api/add")):
+        status, _, data = app_request(port, method, path, cookie)
+        assert status == 403 and json_body(data)["error"] == "origem inválida"
+    status, _, _ = app_request(
+        port, "POST", "/api/send", {**cookie, "X-Salvai": "1", "Origin": "http://evil.com"}, b"{}"
+    )
+    assert status == 403
+
+
+def app_request(port, method, path, headers, body=b"{}"):
+    return http_request(port, method, path, headers, body)
+
+
+def test_drain_body_reads_only_what_is_safe():
+    reads = []
+
+    def handler(length, data):
+        source = types.SimpleNamespace(read=lambda n: reads.append(n) or (data.pop(0) if data else b""))
+        return types.SimpleNamespace(headers={"Content-Length": length}, rfile=source)
+
+    app.drain_body(handler("5", [b"abc", b"de"]))
+    assert reads == [5, 2]
+    reads.clear()
+    app.drain_body(handler("9", [b"abc"]))
+    assert reads == [9, 6]
+    reads.clear()
+    for length in ("", "-1", "x", str(app.PHONE_MAX_CHUNK + 1)):
+        app.drain_body(handler(length, [b"a"]))
+    assert reads == []
+    app.drain_body(types.SimpleNamespace(headers={}))
+
+
+def test_phone_partial_upload_and_stop_drops_parts(phone, api):
+    session = phone.session_for(phone.open_session("127.0.0.1", "Mozilla/5.0 (iPhone)"))
+    reply = phone.plan_uploads(session, [{"name": "video.mp4", "size": 10}])
+    job = phone.uploads[reply["uploads"][0]["id"]]
+    sent = []
+    handler = types.SimpleNamespace(
+        headers={"Content-Length": "10"},
+        rfile=types.SimpleNamespace(read=lambda n: b"" if sent else sent.append(1) or b"1234"),
+        _json=lambda code, payload: sent.append((code, payload)),
+    )
+    phone.receive(handler, session, {"t": job["id"], "offset": "0"})
+    assert sent[-1] == (200, {"received": 4, "done": False}) and job["part"].read_bytes() == b"1234"
+    job["touched"] = 0.0
+    assert phone.incoming() is None
+    phone.stop()
+    assert phone.uploads == {} and not job["part"].exists()
+
+
+def test_api_phone_received_and_open(api, monkeypatch):
+    notes, opened = [], []
+    monkeypatch.setattr(api._tray, "notify", lambda title, msg: notes.append(title))
+    monkeypatch.setattr(app.subprocess, "Popen", lambda args: opened.append(args))
+    monkeypatch.setattr(app.os, "startfile", opened.append, raising=False)
+    api._phone_received(None)
+    assert notes == [] and api._window.js[-1].endswith("app.phoneChanged()")
+    api._window.fail.add("run_js")
+    api._phone_received({"device": "iPhone", "count": 1, "dest": Path("a.jpg")})
+    assert notes == ["Arquivo recebido do celular"]
+    assert api.phone_open_received("x") is False and opened == []
+    target = Path(api._out_dir, app.PHONE_INBOX, "a.jpg")
+    target.parent.mkdir()
+    target.write_bytes(b"1")
+    api._phone.received.append({"id": "r1", "path": target})
+    assert api.phone_open_received("r1") is True and opened[-1][-1] == str(target)
+    api.phone_open_inbox()
+    assert opened[-1] == target.parent

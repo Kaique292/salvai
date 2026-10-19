@@ -47,7 +47,7 @@
 - **Mensagens claras.** Quando algo não dá certo, o app explica o porquê (perfil privado, precisa de login, conteúdo removido, site bloqueou…) e o que fazer.
 - **Armazenamento transparente.** Veja quanto espaço o app usa, o que é cada coisa e limpe o cache com um clique.
 - **Tema claro e escuro**, com uma transição suave.
-- **Salvaí no celular.** Ligue o modo celular, aponte a câmera para o QR code e peça downloads pelo celular — depois salve os arquivos direto nele. Download interrompido continua de onde parou.
+- **Salvaí no celular.** Ligue o modo celular, aponte a câmera para o QR code e peça downloads pelo celular — depois salve os arquivos direto nele. E o caminho inverso: **Enviar para o PC** manda fotos, vídeos e arquivos do celular para o computador pelo Wi-Fi. Transferência interrompida continua de onde parou.
 - **Sala de troca.** Troque arquivos e pastas de qualquer tamanho com um amigo em outra rede, nos dois sentidos. Ele entra pelo navegador do celular ou do PC, sem instalar nada.
 - **Continua trabalhando na bandeja.** Fechou a janela com downloads em andamento, com o modo celular ligado ou com uma sala de troca aberta? O Salvaí vai para a bandeja, avisa com uma notificação e segue trabalhando.
 - **Funciona com o Claude.** Peça para o Claude buscar e baixar vídeos e músicas por você, já organizados em pastas.
@@ -131,6 +131,7 @@ No app, clique no ícone de pessoa → **Contas** → **Entrar**. Abre a página
 1. No app, toque no ícone de celular e ligue o **Modo celular**.
 2. Aponte a câmera do celular para o **QR code**.
 3. Pronto: cole links para baixar no PC, acompanhe o progresso e toque em **Salvar** para levar o arquivo para o celular.
+4. Para mandar do celular para o PC, toque em **Enviar para o PC** e escolha fotos, vídeos ou arquivos.
 
 Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado do link: o Salvaí abre o WhatsApp (o app do PC ou o WhatsApp Web) com uma mensagem pronta, com o link e o nome do Wi-Fi. É só escolher o contato.
 
@@ -139,10 +140,11 @@ Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado d
 - A aba **Arquivos no PC** mostra **só o que o Salvaí baixou** — nada das outras pastas e arquivos do seu computador.
 - No **⋯** de cada arquivo dá para **tirar da lista** (o arquivo continua no PC) ou **apagar do computador**: depois de confirmar, ele vai para a **Lixeira** do Windows e pode ser recuperado. **Limpar lista** esvazia a lista sem apagar nada.
 - Se o download para o celular for interrompido (o Wi-Fi caiu, a tela bloqueou…), ele **continua de onde parou**.
+- **Enviar para o PC:** o que você escolher no celular vai pela rede local, sem passar pela internet, para a pasta **Do celular** dentro da sua pasta de downloads. O celular mostra o progresso de cada arquivo, e o PC lista o que chegou na aba **Recebidos** (com **Mostrar na pasta**) e avisa com uma notificação. Se a conexão cair no meio, o envio **continua de onde parou** — e se a página fechar, é só escolher o mesmo arquivo de novo. Deixe a tela do celular aberta até terminar.
 - No iPhone, os arquivos vão para **Arquivos → Downloads**; para colocar na galeria, abra o vídeo e toque em **Compartilhar → Salvar vídeo**.
 - Funciona com cabo ou Wi-Fi no computador, em redes IPv4 e IPv6.
 - **Quem está conectado:** na aba **Aparelhos**, você vê cada celular conectado e o histórico, e pode **desconectar** qualquer um — o código do QR muda para ele não conseguir voltar, e os outros continuam conectados.
-- **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga. O celular só enxerga e só apaga arquivos que o próprio Salvaí baixou.
+- **Segurança:** o modo celular vem desligado. Só aparelhos da sua rede local com o código do QR entram, e o código muda toda vez que você liga. O celular só enxerga e só apaga arquivos que o próprio Salvaí baixou, e o que ele envia fica só na pasta **Do celular**.
 
 <details>
 <summary><b>O celular não conecta?</b></summary>

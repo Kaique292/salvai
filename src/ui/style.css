@@ -2184,6 +2184,34 @@ kbd {
   line-height: 1.45;
   color: var(--muted);
 }
+.received-head {
+  margin: 0 0 8px;
+}
+.received-incoming {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--input);
+  font-size: 13px;
+  font-weight: 600;
+}
+.received-incoming[hidden] {
+  display: none;
+}
+.received-bar {
+  height: 4px;
+  margin-top: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.received-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
 .danger-soft {
   color: var(--accent);
   background: rgb(229 72 77 / 0.12);

@@ -1195,6 +1195,17 @@ window.app.otaProgress = (pct) => {
     action.innerHTML = `<span class="spin"></span> ${pct < 100 ? `Baixando ${pct}%` : "Instalando…"}`;
 };
 
+function size(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${unit ? value.toFixed(value < 10 ? 1 : 0).replace(".", ",") : value} ${units[unit]}`;
+}
+
 const phone = (() => {
   const modal = $("#phone-modal");
   const sw = $("#phone-switch");
@@ -1273,6 +1284,35 @@ const phone = (() => {
     });
     $("#phone-pane-connect").hidden = name !== "connect";
     $("#phone-pane-devices").hidden = name !== "devices";
+    $("#phone-pane-received").hidden = name !== "received";
+  }
+
+  function receivedRow(r) {
+    const row = document.createElement("div");
+    row.className = "dev-row";
+    const where = `${size(r.size)} · de ${r.device} · ${when(r.at)}`;
+    row.innerHTML = `<div class="dev-meta"><strong>${escapeHtml(r.name)}</strong><small>${escapeHtml(where)}</small></div>`;
+    const btn = document.createElement("button");
+    btn.className = "ghost";
+    btn.textContent = "Mostrar na pasta";
+    btn.addEventListener("click", () => api().phone_open_received(r.id));
+    row.appendChild(btn);
+    return row;
+  }
+
+  function renderReceived() {
+    const received = state.received || [];
+    $("#received-count").textContent = received.length ? String(received.length) : "";
+    const list = $("#received-list");
+    list.replaceChildren(...received.map(receivedRow));
+    if (!received.length) list.innerHTML = '<div class="dev-empty">Nada recebido do celular ainda</div>';
+    const incoming = state.incoming;
+    $("#received-incoming").hidden = !incoming;
+    if (!incoming) return;
+    const pct = Math.floor((incoming.done / incoming.total) * 100);
+    const files = incoming.files === 1 ? "1 arquivo" : `${incoming.files} arquivos`;
+    $("#received-incoming-text").textContent = `Recebendo ${files} do celular · ${pct}%`;
+    $("#received-incoming-bar").style.width = `${pct}%`;
   }
 
   function render() {
@@ -1299,6 +1339,7 @@ const phone = (() => {
       ? online.map((d) => `<span class="device">● ${escapeHtml(d.name)} conectado</span>`).join("")
       : '<span class="waiting">Nenhum celular conectado ainda</span>';
     renderDevices();
+    renderReceived();
     const others = state.others || [];
     $("#phone-others").classList.toggle("has", others.length > 0);
     $("#phone-others-list").innerHTML = others.map((u) => `<li>${escapeHtml(u)}</li>`).join("");
@@ -1353,6 +1394,7 @@ const phone = (() => {
     state = await api().phone_clear_history();
     render();
   });
+  $("#received-folder").addEventListener("click", () => api().phone_open_inbox());
   $("#phone-firewall").addEventListener("click", () => api().phone_allow_firewall());
   $("#phone-settings").addEventListener("click", () => api().open_network_settings());
   $("#phone-btn").addEventListener("click", open);
@@ -1396,17 +1438,6 @@ const room = (() => {
   let risky = null;
   let named = false;
   let drawn = "";
-
-  function size(n) {
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = n;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-      value /= 1024;
-      unit++;
-    }
-    return `${unit ? value.toFixed(value < 10 ? 1 : 0).replace(".", ",") : value} ${units[unit]}`;
-  }
 
   function describe(item) {
     const count = item.kind === "folder" ? ` · ${item.count} ${item.count === 1 ? "arquivo" : "arquivos"}` : "";

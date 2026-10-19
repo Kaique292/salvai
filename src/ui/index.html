@@ -343,7 +343,28 @@
             <button data-ptab="devices" role="tab" aria-selected="false">
               Aparelhos <span class="tab-count" id="phone-count"></span>
             </button>
+            <button data-ptab="received" role="tab" aria-selected="false">
+              Recebidos <span class="tab-count" id="received-count"></span>
+            </button>
           </nav>
+
+          <div class="phone-pane" id="phone-pane-received" hidden>
+            <div class="received-incoming" id="received-incoming" hidden>
+              <span id="received-incoming-text"></span>
+              <div class="received-bar"><span id="received-incoming-bar"></span></div>
+            </div>
+            <div class="dev-head received-head">
+              <h4>Chegaram do celular</h4>
+              <button class="ghost" id="received-folder">Abrir pasta</button>
+            </div>
+            <div class="dev-list" id="received-list"></div>
+            <div class="dev-foot">
+              <p>
+                No celular, toque em <b>Enviar para o PC</b> para mandar fotos, vídeos e arquivos pela rede Wi-Fi. Eles
+                ficam na pasta <b>Do celular</b>, dentro da sua pasta de downloads.
+              </p>
+            </div>
+          </div>
 
           <div class="phone-pane" id="phone-pane-devices" hidden>
             <h4>Conectados agora</h4>

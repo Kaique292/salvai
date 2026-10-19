@@ -51,12 +51,15 @@ function setOnline(ok, computer, revoked) {
   $("#computer").textContent = ok ? `Conectado ao ${computer}` : "Desconectado";
 }
 
-async function api(path, options) {
-  const res = await fetch(path, { cache: "no-cache", ...options });
+async function api(path, options = {}) {
+  const headers = options.method ? { "X-Salvai": "1", ...options.headers } : options.headers;
+  const res = await fetch(path, { cache: "no-cache", ...options, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const error = new Error(data.error || "Algo deu errado");
     error.revoked = !!data.revoked;
+    error.status = res.status;
+    error.body = data;
     throw error;
   }
   return data;
@@ -294,7 +297,9 @@ async function refresh() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
+  if (document.hidden) return;
+  refresh();
+  sender.wake();
 });
 
 $("#add-form").addEventListener("submit", async (e) => {
@@ -329,6 +334,158 @@ document.querySelectorAll(".tabs button").forEach((b) =>
     refresh();
   }),
 );
+
+const sender = (() => {
+  const tasks = [];
+  let chunk = 4 << 20;
+  let running = false;
+  let wakeLock = null;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function size(bytes) {
+    if (bytes < 1024 ** 2) return `${Math.ceil(bytes / 1024)} KB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1).replace(".", ",")} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(2).replace(".", ",")} GB`;
+  }
+
+  function line(t) {
+    const total = t.file.size;
+    if (t.state === "done") return `<small class="done">No computador · ${size(total)}</small>`;
+    if (t.state === "error") return `<small class="error">${escapeHtml(t.error)}</small>`;
+    if (t.state !== "sending") return `<small>Na fila · ${size(total)}</small>`;
+    const pct = total ? Math.floor((t.offset / total) * 100) : 100;
+    return `<small>${size(t.offset)} de ${size(total)} · ${pct}%</small><div class="bar"><span style="width:${pct}%"></span></div>`;
+  }
+
+  function render() {
+    const done = tasks.filter((t) => t.state === "done").length;
+    const failed = tasks.filter((t) => t.state === "error").length;
+    const busy = tasks.length - done - failed;
+    let summary = done === 1 ? "1 arquivo enviado para o PC" : `${done} arquivos enviados para o PC`;
+    if (failed) summary = failed === 1 ? "1 arquivo não foi enviado" : `${failed} arquivos não foram enviados`;
+    if (busy) summary = `Enviando ${done + failed + 1} de ${tasks.length}…`;
+    $("#send-panel").hidden = !tasks.length;
+    $("#send-summary").textContent = summary;
+    $("#send-keep").hidden = !busy;
+    $("#send-clear").hidden = !!busy;
+    $("#send-list").innerHTML = tasks
+      .map((t, i) => {
+        const retry =
+          t.state === "error"
+            ? `<button type="button" class="send-retry" data-retry="${i}">Tentar de novo</button>`
+            : "";
+        return `<div class="send-row"><div class="meta"><strong>${escapeHtml(t.file.name)}</strong>${line(t)}</div>${retry}</div>`;
+      })
+      .join("");
+  }
+
+  function hold(on) {
+    if (!on) {
+      wakeLock?.release().catch(() => {});
+      wakeLock = null;
+      return;
+    }
+    navigator.wakeLock?.request("screen").then(
+      (lock) => (wakeLock = lock),
+      () => {},
+    );
+  }
+
+  async function plan(list) {
+    for (let i = 0; i < list.length; i += 50) {
+      const part = list.slice(i, i + 50);
+      const reply = await api("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: part.map((t) => ({ name: t.file.name, size: t.file.size })) }),
+      });
+      chunk = reply.chunk;
+      reply.uploads.forEach((u, j) => Object.assign(part[j], { id: u.id, offset: u.offset, state: "waiting" }));
+    }
+  }
+
+  async function prepare(list) {
+    list.forEach((t) => Object.assign(t, { state: "planning", error: "" }));
+    render();
+    try {
+      await plan(list);
+    } catch (err) {
+      list
+        .filter((t) => t.state === "planning")
+        .forEach((t) => Object.assign(t, { state: "error", error: err.message }));
+    }
+    render();
+    pump();
+  }
+
+  async function send(t) {
+    t.state = "sending";
+    render();
+    let failures = 0;
+    while (t.offset < t.file.size) {
+      try {
+        const reply = await api(`/api/upload?t=${encodeURIComponent(t.id)}&offset=${t.offset}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: t.file.slice(t.offset, Math.min(t.file.size, t.offset + chunk)),
+        });
+        t.offset = reply.received;
+        failures = 0;
+      } catch (err) {
+        if (err.status === 409) {
+          t.offset = err.body.received;
+          await wait(300);
+        } else if (err.status || ++failures > 20) {
+          t.state = "error";
+          t.error = err.status ? err.message : "A conexão com o computador caiu. Confira o Wi-Fi.";
+          return render();
+        } else {
+          await wait(1500);
+        }
+      }
+      render();
+    }
+    t.state = "done";
+    render();
+  }
+
+  async function pump() {
+    if (running) return;
+    running = true;
+    hold(true);
+    let next;
+    while ((next = tasks.find((t) => t.state === "waiting"))) await send(next);
+    running = false;
+    hold(false);
+  }
+
+  $("#send-btn").addEventListener("click", () => $("#send-input").click());
+  $("#send-input").addEventListener("change", (e) => {
+    const files = [...e.target.files];
+    e.target.value = "";
+    if (!files.length) return;
+    const fresh = files.map((file) => ({ file, id: "", offset: 0 }));
+    tasks.push(...fresh);
+    prepare(fresh);
+  });
+  $("#send-list").addEventListener("click", (e) => {
+    const button = e.target.closest("[data-retry]");
+    if (button) prepare([tasks[button.dataset.retry]]);
+  });
+  $("#send-clear").addEventListener("click", () => {
+    tasks.length = 0;
+    render();
+  });
+  window.addEventListener("beforeunload", (e) => {
+    if (running) e.preventDefault();
+  });
+
+  return {
+    wake() {
+      if (running) hold(true);
+    },
+  };
+})();
 
 if (/iPhone|iPad/.test(navigator.userAgent)) $("#ios-tip").classList.add("show");
 refresh();
