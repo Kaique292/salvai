@@ -21,7 +21,8 @@ Apenas a versão mais recente recebe correções.
 - Só aceita aparelhos da **sub-rede da sua casa** (IPv4) ou do mesmo prefixo IPv6; VPNs e outras redes ficam de fora.
 - Exige um **código aleatório de 128 bits**, que muda toda vez que o modo é ligado. O código sai da barra de endereço logo no primeiro acesso e fica guardado num cookie `HttpOnly`/`SameSite=Strict`.
 - Bloqueia o IP depois de 20 tentativas com código errado, limita pedidos por minuto e o tamanho dos pedidos.
-- Recusa pedidos de outros sites (CSRF) e ataques de _DNS rebinding_ (só aceita acesso por endereço IP).
+- Recusa pedidos de outros sites (CSRF): todo pedido que muda algo precisa do cabeçalho próprio `X-Salvai` e, se vier com `Origin`, da mesma origem. Também barra ataques de _DNS rebinding_ (só aceita acesso por endereço IP).
+- **Enviar para o PC** só aceita aparelhos já conectados pelo QR, grava apenas na pasta **Do celular** (com nomes limpos, sem subpastas, sem `..` e sem sobrescrever nada), confere o espaço livre antes de começar, recebe em pedaços de até 16 MB e apaga os pedaços incompletos quando o modo celular é desligado.
 - Só entrega **arquivos de mídia** da pasta de downloads — documentos e outros arquivos nunca saem do PC — e impede acesso fora dessa pasta.
 - Envia cabeçalhos de segurança (CSP, `nosniff`, `X-Frame-Options`, `no-referrer`).
 
