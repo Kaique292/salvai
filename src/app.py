@@ -849,7 +849,9 @@ def device_name(user_agent: str) -> str:
     return "Navegador"
 
 
-def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, head: bool = False) -> None:
+def send_file(
+    handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, head: bool = False, content_type: str = ""
+) -> None:
     stat = path.stat()
     size = stat.st_size
     etag = f'"{size:x}-{int(stat.st_mtime):x}"'
@@ -877,7 +879,9 @@ def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, 
             return
         status = 206
     handler.send_response(status)
-    handler.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+    handler.send_header(
+        "Content-Type", content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    )
     handler.send_header("Content-Length", str(end - start + 1))
     handler.send_header("Accept-Ranges", "bytes")
     handler.send_header("ETag", etag)
@@ -905,6 +909,149 @@ def send_file(handler: BaseHTTPRequestHandler, path: Path, as_attachment: bool, 
                 break
             handler.wfile.write(chunk)
             remaining -= len(chunk)
+
+
+STREAM_SEGMENT = 4
+STREAM_AHEAD = 75
+STREAM_IDLE = 120
+STREAM_WAIT = 60
+STREAM_VIDEO = (
+    "-map 0:v:0 -map 0:a:0? -c:v libx264 -preset veryfast -crf 22 -profile:v high -level:v 4.1 "
+    "-pix_fmt yuv420p -sc_threshold 0"
+)
+STREAM_SCALE = "scale=w='if(gte(iw,ih),-2,min(1080,trunc(iw/2)*2))':h='if(gte(iw,ih),min(1080,trunc(ih/2)*2),-2)'"
+STREAM_KEYS = f"expr:gte(t,n_forced*{STREAM_SEGMENT})"
+STREAM_AUDIO = "-sn -dn -c:a aac -ac 2 -b:a 160k"
+STREAM_HLS = f"-f hls -hls_time {STREAM_SEGMENT} -hls_list_size 0 -hls_flags temp_file"
+PHONE_CONTAINERS = {".mp4", ".m4v", ".mov", ".m4a", ".mp3"}
+PHONE_IMAGES = {".jpg", ".png"}
+
+
+def probe_media(ffmpeg: str, path: Path) -> dict:
+    out = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=CREATE_NO_WINDOW,
+        timeout=20,
+    ).stderr
+    duration = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", out)
+    streams = re.findall(r"Stream #\S+.*?: (Video|Audio): (\w+)(.*)", out)
+    return {
+        "duration": int(duration[1]) * 3600 + int(duration[2]) * 60 + float(duration[3]) if duration else 0.0,
+        "video": [(codec, rest) for kind, codec, rest in streams if kind == "Video" and "attached pic" not in rest],
+        "audio": [codec for kind, codec, _ in streams if kind == "Audio"],
+    }
+
+
+def plays_on_phone(path: Path, info: dict) -> bool:
+    if path.suffix.lower() in PHONE_IMAGES:
+        return True
+    if path.suffix.lower() not in PHONE_CONTAINERS:
+        return False
+    video_ok = all(codec == "h264" and not re.search(r"High 10|4:2:2|4:4:4", rest) for codec, rest in info["video"][:1])
+    return video_ok and all(codec in ("aac", "mp3") for codec in info["audio"][:1])
+
+
+class MediaStream:
+    """Converte na hora, em pedaços HLS, um vídeo ou áudio que o navegador do celular não toca."""
+
+    def __init__(self, ffmpeg: str, source: Path, info: dict, folder: Path):
+        self.ffmpeg, self.source, self.folder = ffmpeg, source, folder
+        self.video = bool(info["video"])
+        self.duration = info["duration"]
+        self.count = -int(-self.duration // STREAM_SEGMENT)
+        self.token = secrets.token_urlsafe(18)
+        self.proc: subprocess.Popen | None = None
+        self.runs: list[Path] = []
+        self.start_at = self.next = 0
+        self.touched = time.time()
+        self.lock = threading.Lock()
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
+
+    def playlist(self) -> bytes:
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            f"#EXT-X-TARGETDURATION:{STREAM_SEGMENT}",
+            "#EXT-X-MEDIA-SEQUENCE:0",
+            "#EXT-X-PLAYLIST-TYPE:VOD",
+        ]
+        for n in range(self.count):
+            length = min(STREAM_SEGMENT, self.duration - n * STREAM_SEGMENT)
+            lines += [f"#EXTINF:{length:.3f},", f"/api/stream/seg?t={self.token}&n={n}"]
+        lines.append("#EXT-X-ENDLIST")
+        return ("\n".join(lines) + "\n").encode()
+
+    def ready(self, n: int) -> Path | None:
+        return next((p for run in self.runs if (p := run / f"seg{n:05d}.ts").is_file()), None)
+
+    def command(self, n: int, run: Path) -> list[str]:
+        start = str(n * STREAM_SEGMENT)
+        args = [self.ffmpeg, *"-hide_banner -nostdin -loglevel error -ss".split(), start, "-i", str(self.source)]
+        if self.video:
+            args += STREAM_VIDEO.split() + ["-vf", STREAM_SCALE, "-force_key_frames", STREAM_KEYS]
+        else:
+            args += ["-vn", "-map", "0:a:0"]
+        args += STREAM_AUDIO.split() + ["-output_ts_offset", start, *STREAM_HLS.split(), "-start_number", str(n)]
+        return args + ["-hls_segment_filename", str(run / "seg%05d.ts"), str(run / "index.m3u8")]
+
+    def launch(self, n: int):
+        self.stop_process()
+        run = self.folder / f"r{len(self.runs)}"
+        run.mkdir()
+        self.runs.append(run)
+        self.start_at = self.next = n
+        self.proc = subprocess.Popen(
+            self.command(n, run),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def advance(self):
+        while self.next < self.count and self.ready(self.next):
+            self.next += 1
+
+    def segment(self, n: int) -> Path | None:
+        if not 0 <= n < self.count:
+            return None
+        deadline = time.time() + STREAM_WAIT
+        while True:
+            with self.lock:
+                self.touched = time.time()
+                self.advance()
+                found = self.ready(n)
+                if found:
+                    if self.running() and self.next - n > STREAM_AHEAD:
+                        self.stop_process()
+                    return found
+                covered = self.start_at <= n <= self.next + 8
+                if covered and self.proc and not self.running():
+                    return None
+                if not covered or not self.proc:
+                    self.launch(n)
+            if time.time() > deadline:
+                return self.ready(n)
+            time.sleep(0.1)
+
+    def stop_process(self):
+        if self.running():
+            self.proc.kill()
+            self.proc.wait(timeout=10)
+        self.proc = None
+
+    def close(self):
+        with self.lock:
+            self.stop_process()
+        shutil.rmtree(self.folder, ignore_errors=True)
 
 
 ACTIVE_STATUSES = ("setup", "queued", "fetching", "downloading", "processing", "paused")
@@ -1006,6 +1153,9 @@ class PhoneServer:
         self.uploads: dict[str, dict] = {}
         self.received: deque = deque(maxlen=PHONE_RECEIVED_LIMIT)
         self.upload_lock = threading.Lock()
+        self.stream: MediaStream | None = None
+        self.stream_session: dict | None = None
+        self.stream_lock = threading.Lock()
 
     def session_for(self, sid: str) -> dict | None:
         return self.sessions.get(sid) if sid else None
@@ -1066,6 +1216,9 @@ class PhoneServer:
     def watch_idle(self, server):
         while self.server is server:
             time.sleep(30)
+            stream = self.stream
+            if stream and time.time() - stream.touched > STREAM_IDLE:
+                self.end_stream(stream)
             if self.server is server and time.time() - self.last_activity > PHONE_IDLE_LIMIT:
                 self.stop()
                 self.api._phone_auto_off()
@@ -1151,6 +1304,8 @@ class PhoneServer:
                 session = phone.session_for(sid)
                 if session:
                     return session
+                if path.startswith("/api/stream/") and (owner := phone.stream_owner(query.get("t", ""))):
+                    return owner
                 if method == "GET" and path == "/" and secrets.compare_digest(query.get("k", ""), phone.token):
                     self.new_session = phone.open_session(self.client_address[0], self.headers.get("User-Agent"))
                     return phone.session_for(self.new_session)
@@ -1239,6 +1394,7 @@ class PhoneServer:
             with self.upload_lock:
                 pending, self.uploads = list(self.uploads.values()), {}
             drop_parts(pending)
+            self.end_stream()
 
     def inbox(self) -> Path:
         return Path(self.api._out_dir) / PHONE_INBOX
@@ -1351,6 +1507,55 @@ class PhoneServer:
         entry = next((r for r in list(self.received) if r["id"] == entry_id), None)
         return entry["path"] if entry and entry["path"].is_file() else None
 
+    def stream_owner(self, token: str) -> dict | None:
+        stream, owner = self.stream, self.stream_session
+        if not stream or not owner or not secrets.compare_digest(token, stream.token):
+            return None
+        with self.session_lock:
+            return owner if any(s is owner for s in self.sessions.values()) else None
+
+    def end_stream(self, stream: "MediaStream | None" = None):
+        with self.stream_lock:
+            if not self.stream or (stream and self.stream is not stream):
+                return
+            old, self.stream, self.stream_session = self.stream, None, None
+        old.close()
+
+    def play(self, session: dict, target: Path) -> dict:
+        ffmpeg = str(Path(self.api._ffmpeg) / "ffmpeg.exe")
+        try:
+            info = probe_media(ffmpeg, target)
+        except (OSError, subprocess.SubprocessError):
+            return {"direct": True}
+        if plays_on_phone(target, info) or not info["duration"] or not (info["video"] or info["audio"]):
+            return {"direct": True}
+        self.end_stream()
+        stream = MediaStream(ffmpeg, target, info, CACHE_DIR / "stream")
+        with self.stream_lock:
+            self.stream, self.stream_session = stream, session
+        return {"direct": False, "stream": f"/api/stream/index.m3u8?t={stream.token}"}
+
+    def send_stream(self, h, method: str, path: str, query: dict):
+        stream = self.stream
+        if not stream or not secrets.compare_digest(query.get("t", ""), stream.token):
+            return h._json(404, {"error": "Esse vídeo não está mais aberto. Toque nele de novo."})
+        if path == "/api/stream/index.m3u8":
+            body = stream.playlist()
+            h.send_response(200)
+            h.send_header("Content-Type", "application/vnd.apple.mpegurl")
+            h.send_header("Content-Length", str(len(body)))
+            h.send_header("Cache-Control", "no-store")
+            for name, value in SECURITY_HEADERS.items():
+                h.send_header(name, value)
+            h.end_headers()
+            if method != "HEAD":
+                h.wfile.write(body)
+            return
+        segment = stream.segment(int(query.get("n", "-1"))) if path == "/api/stream/seg" else None
+        if not segment:
+            return h._json(404, {"error": "Não deu para converter esse trecho do vídeo."})
+        send_file(h, segment, as_attachment=False, head=method == "HEAD", content_type="video/mp2t")
+
     def route(self, h, method: str, path: str, query: dict):
         api = self.api
         if method == "GET" and path == "/":
@@ -1404,6 +1609,13 @@ class PhoneServer:
             if not target:
                 raise ValueError("Arquivo não encontrado.")
             return send_file(h, target, as_attachment=query.get("dl") == "1", head=method == "HEAD")
+        if method == "GET" and path == "/api/play":
+            target = api._saved_file(query.get("id", ""))
+            if not target:
+                raise ValueError("Arquivo não encontrado.")
+            return h._json(200, self.play(h.session, target))
+        if method in ("GET", "HEAD") and path.startswith("/api/stream/"):
+            return self.send_stream(h, method, path, query)
         h._json(404, {"error": "não encontrado"})
 
     def status(self) -> dict:
