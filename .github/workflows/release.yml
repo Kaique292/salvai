@@ -60,4 +60,5 @@ jobs:
             Set-Content notes.md ("## " + $notes) -Encoding utf8
             gh release create $env:TAG --title "Salvaí $env:TAG" --notes-file notes.md
           }
+          gh release edit $env:TAG --title "Salvaí $env:TAG"
           gh release upload $env:TAG dist/Salvai.exe dist/salvai-mcp.exe dist/SHA256SUMS.txt --clobber
