@@ -45,10 +45,10 @@
 - **Qualquer site.** YouTube, Instagram (reels, posts, stories), TikTok, X, Facebook, Vimeo, Twitch e muito mais.
 - **Contas conectadas.** Stories, perfis privados e posts sensíveis exigem login: você entra pela página oficial do site, dentro do app, e o Salvaí cuida do resto.
 - **Mensagens claras.** Quando algo não dá certo, o app explica o porquê (perfil privado, precisa de login, conteúdo removido, site bloqueou…) e o que fazer.
-- **Armazenamento transparente.** Veja quanto espaço o app usa, o que é cada coisa e limpe o cache com um clique.
+- **Armazenamento transparente.** Veja quanto espaço o app usa, o que é cada coisa e limpe o que quiser com um clique.
 - **Tema claro e escuro**, com uma transição suave.
 - **Salvaí no celular.** Ligue o modo celular, aponte a câmera para o QR code e peça downloads pelo celular — depois salve os arquivos direto nele. E o caminho inverso: **Enviar para o PC** manda fotos, vídeos e arquivos do celular para o computador pelo Wi-Fi. Transferência interrompida continua de onde parou.
-- **Sala de troca.** Troque arquivos e pastas de qualquer tamanho com um amigo em outra rede, nos dois sentidos. Ele entra pelo navegador do celular ou do PC, sem instalar nada.
+- **Sala de troca.** Troque arquivos e pastas de qualquer tamanho com um amigo em outra rede, nos dois sentidos. Ele entra pelo navegador do celular ou do PC, sem instalar nada. É só arrastar os arquivos para a janela; fotos e vídeos aparecem com miniatura antes de baixar e abrem dentro do app depois de recebidos.
 - **Continua trabalhando na bandeja.** Fechou a janela com downloads em andamento, com o modo celular ligado ou com uma sala de troca aberta? O Salvaí vai para a bandeja, avisa com uma notificação e segue trabalhando.
 - **Funciona com o Claude.** Peça para o Claude buscar e baixar vídeos e músicas por você, já organizados em pastas.
 
@@ -62,6 +62,14 @@
   <tr>
     <td align="center"><sub>Tema claro, com configuração por link</sub></td>
     <td align="center"><sub>Contas conectadas</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/celular.png" alt="Salvaí no celular"></td>
+    <td width="50%"><img src="docs/images/sala-de-troca.png" alt="Sala de troca"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Modo celular: aponte a câmera para o QR code</sub></td>
+    <td align="center"><sub>Sala de troca, com miniaturas e progresso</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/armazenamento.png" alt="Armazenamento"></td>
@@ -136,7 +144,7 @@ No app, clique no ícone de pessoa → **Contas** → **Entrar**. Abre a página
 Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado do link: o Salvaí abre o WhatsApp (o app do PC ou o WhatsApp Web) com uma mensagem pronta, com o link e o nome do Wi-Fi. É só escolher o contato.
 
 - Não precisa instalar nada no celular — abre no navegador (Android e iPhone).
-- **Assistir sem baixar:** em **Arquivos no PC**, toque no ▶ para ver o vídeo ou ouvir a música direto do computador, podendo avançar e voltar.
+- **Assistir sem baixar:** em **Arquivos no PC**, toque no ▶ para ver o vídeo ou ouvir a música direto do computador, podendo avançar e voltar. Se o vídeo estiver num formato que o celular não toca (MKV, WebM, HEVC, AV1…), o PC converte na hora enquanto você assiste.
 - A aba **Arquivos no PC** mostra **só o que o Salvaí baixou** — nada das outras pastas e arquivos do seu computador.
 - No **⋯** de cada arquivo dá para **tirar da lista** (o arquivo continua no PC) ou **apagar do computador**: depois de confirmar, ele vai para a **Lixeira** do Windows e pode ser recuperado. **Limpar lista** esvazia a lista sem apagar nada.
 - Se o download para o celular for interrompido (o Wi-Fi caiu, a tela bloqueou…), ele **continua de onde parou**.
@@ -163,11 +171,13 @@ Mande e receba arquivos e pastas com quem está em **outra rede** — outra casa
 1. No app, clique no ícone de **duas setas** e em **Criar sala**.
 2. Toque em **WhatsApp** (ou **Copiar**) para mandar o **link** e o **código** da sala.
 3. Quando a pessoa entrar, aparece um aviso: clique em **Deixar entrar**.
-4. Cada um adiciona os arquivos e pastas que quer mandar e escolhe o que quer baixar — ou **Baixar tudo**.
+4. Cada um adiciona os arquivos e pastas que quer mandar (pelos botões ou arrastando para a janela) e escolhe o que quer baixar — ou **Baixar tudo**.
 
 - **Quem recebe não precisa instalar nada:** a sala abre no navegador do celular ou do PC. Se a pessoa também tiver o Salvaí, ela entra por **Sala de troca → Entrar numa sala**, colando o link e o código.
 - **Nos dois sentidos:** você vê o que cada convidado adicionou e baixa para a pasta que escolher; os convidados veem e baixam o que você adicionou.
 - **Só sai o que for pedido:** os arquivos ficam no aparelho de quem adicionou até alguém clicar em baixar.
+- **Veja antes de baixar:** fotos e vídeos aparecem com miniatura. Depois de recebidos, clique em **Ver** para abrir a foto ou assistir ao vídeo dentro do app, ou em **Mostrar** para achar o arquivo na pasta.
+- **Progresso de verdade:** cada item mostra quanto já chegou, a velocidade e o tempo que falta; nas pastas, quantos arquivos já foram.
 - **Pastas inteiras:** no Salvaí, a pasta chega com a mesma estrutura. No navegador do PC (Chrome e Edge), a pessoa escolhe uma pasta e recebe tudo do mesmo jeito; nos outros navegadores e no celular, a pasta chega num `.zip`.
 - **Continua de onde parou:** se a conexão cair, o download continua de onde parou. No navegador, quem está enviando precisa deixar a aba aberta; se fechar, basta adicionar o mesmo arquivo de novo para continuar.
 - **Pode fechar a janela:** a sala continua aberta na bandeja, junto com os downloads normais.
@@ -280,6 +290,8 @@ yarn install
 | `yarn test`           | Roda todos os testes (Python e interface) com cobertura   |
 | `yarn coverage:badge` | Atualiza o badge de cobertura depois dos testes           |
 
+Os prints deste README saem da interface de verdade, com dados de exemplo: `.venv\Scripts\python.exe scripts\screenshots.py` (precisa do Microsoft Edge e de internet para baixar as miniaturas).
+
 ### Estrutura
 
 ```
@@ -288,9 +300,11 @@ salvai/
 │  ├─ app.py            app (janela, fila, downloads, contas, ponte do MCP)
 │  ├─ salvai_mcp.py     conector MCP
 │  └─ ui/               interface (HTML, CSS e JavaScript)
+│     ├─ mobile/        página do modo celular
+│     └─ room/          página da sala de troca no navegador
 ├─ assets/              ícone, logo e tela de carregamento
 ├─ tests/              testes do app (pytest) e da interface (vitest)
-├─ scripts/             geração da arte, build e badge de cobertura
+├─ scripts/             geração da arte e dos prints, build e badge de cobertura
 ├─ packaging/           configuração do PyInstaller
 ├─ docs/images/         imagens deste README
 └─ .github/             verificação, releases e modelos de issue
@@ -320,7 +334,7 @@ As versões e o [CHANGELOG](CHANGELOG.md) são gerados pelo [release-please](htt
 **Salvaí** is a free, ad-free **YouTube, Instagram, TikTok, X and Facebook video downloader for Windows**. Paste a link and save it as **MP4 video (up to 4K)** or **MP3 audio (up to 320 kbps)** — it also supports 1,800+ other sites, playlists, a download queue with priorities, and private content from accounts you connect.
 
 - **Phone mode:** scan a QR code to send links to your PC, stream what was downloaded and save it to your phone over Wi-Fi — no app to install.
-- **Exchange room:** swap files and whole folders both ways with a friend on another network through a private link and code — they join from any browser, no install.
+- **Exchange room:** swap files and whole folders both ways with a friend on another network through a private link and code — they join from any browser, no install. Drag files in, preview photos and videos before downloading.
 - **Claude integration (MCP):** ask Claude to search, download and organize videos and music into folders.
 - **Single `.exe`, no install**, no telemetry, updates verified by SHA-256.
 

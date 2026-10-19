@@ -237,7 +237,8 @@ describe("sala de troca", () => {
     const items = $$("#room-theirs .room-item");
     const text = (i) => items[i].querySelector("small").textContent;
     expect(text(0)).toBe("Recebendo 50% · 350 MB de 700 MB");
-    expect(items[0].querySelector(".room-item-bar i").style.width).toBe("50%");
+    expect(parseFloat(items[0].querySelector(".room-ring .bar").style.strokeDashoffset)).toBeCloseTo(Math.PI * 21);
+    expect(items[0].className).toBe("room-item sending");
     expect(button(items[0], "Baixar")).toBeUndefined();
     expect(text(1)).toBe("2,0 KB · de Bruno");
     expect(items[1].querySelector(".room-tag").textContent).toBe("programa");
@@ -476,5 +477,125 @@ describe("sala de troca", () => {
     expect($("#room-notice").textContent).toBe("A sala já tem itens demais.");
     expect($("#room-mine").children.length).toBe(2);
     expect(api.room_add).not.toHaveBeenCalled();
+  });
+
+  test("progresso com velocidade, tempo restante e linhas que não piscam", async () => {
+    const MB = 1024 * 1024;
+    const item = (done, extra = {}) => ({
+      id: "v",
+      kind: "folder",
+      name: "Fotos",
+      size: 100 * MB,
+      count: 3,
+      risky: false,
+      owner: "Bruno",
+      thumb: "",
+      progress: { state: "sending", done, total: 100 * MB, files: 3, finished: 1 },
+      ...extra,
+    });
+    const states = [item(0), item(10 * MB), item(10 * MB), item(30 * MB), item(100 * MB)].map((i) =>
+      hostState({ theirs: [i] }),
+    );
+    await setup(states);
+    await openModal();
+    const row = $("#room-theirs .room-item");
+    const small = () => row.querySelector("small").textContent;
+    expect(small()).toBe("Recebendo 0% · 0 B de 100 MB · 1 de 3 arquivos");
+    await tick(1000);
+    expect($("#room-theirs .room-item")).toBe(row);
+    expect(small()).toBe("Recebendo 10% · 10 MB de 100 MB · 10 MB/s · 0:09 restante · 1 de 3 arquivos");
+    await tick(1000);
+    await tick(1000);
+    expect(small()).toBe("Recebendo 30% · 30 MB de 100 MB · 10 MB/s · 0:07 restante · 1 de 3 arquivos");
+    await tick(1000);
+    expect(small()).toBe("Recebendo 100% · 100 MB de 100 MB · 34 MB/s · 0:00 restante · 1 de 3 arquivos");
+  });
+
+  test("miniaturas, ver foto e vídeo recebidos e abrir no player", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const done = { state: "done", done: 1, total: 1, files: 1, finished: 1 };
+    const theirs = [
+      {
+        id: "f",
+        kind: "file",
+        name: "foto.jpg",
+        size: 1,
+        count: 1,
+        thumb: "data:image/jpeg;base64,AA==",
+        progress: done,
+      },
+      { id: "v", kind: "file", name: "clip.mp4", size: 1, count: 1, thumb: "", progress: done },
+      { id: "t", kind: "file", name: "nota.txt", size: 1, count: 1, thumb: "", progress: done },
+      { id: "n", kind: "file", name: "novo.png", size: 1, count: 1, thumb: "", progress: null },
+      {
+        id: "w",
+        kind: "file",
+        name: "lento.mkv",
+        size: 0,
+        count: 1,
+        thumb: "",
+        progress: { state: "waiting", done: 0, total: 0 },
+      },
+    ];
+    const previews = {
+      f: { kind: "image", name: "foto.jpg", url: "http://127.0.0.1:9/a/foto.jpg" },
+      v: { kind: "video", name: "clip.mp4", url: "http://127.0.0.1:9/b/clip.mp4" },
+    };
+    const { api } = await setup(hostState({ theirs }), { room_preview: async (id) => previews[id] || {} });
+    await openModal();
+    const rows = $$("#room-theirs .room-item");
+    const img = rows[0].querySelector(".room-thumb img");
+    expect(img.getAttribute("src")).toBe("data:image/jpeg;base64,AA==");
+    img.dispatchEvent(new Event("load"));
+    await window.app.roomDropped(hostState({ theirs: theirs.map((i) => ({ ...i, owner: "Bia" })) }));
+    expect(rows[0].classList.contains("has-thumb")).toBe(true);
+    expect(rows.map((r) => r.classList.contains("can-view"))).toEqual([true, true, false, false, false]);
+    expect(button(rows[2], "Ver")).toBeUndefined();
+    expect(button(rows[3], "Ver")).toBeUndefined();
+    expect(rows[4].className).toBe("room-item waiting");
+    const viewer = $("#room-viewer");
+    click(rows[2].querySelector(".room-thumb"));
+    await tick(0);
+    expect(api.room_preview).not.toHaveBeenCalled();
+    click(rows[0].querySelector(".room-thumb"));
+    await tick(0);
+    expect(viewer.hidden).toBe(false);
+    expect($("#room-viewer-img").src).toBe(previews.f.url);
+    expect($("#room-viewer-img").hidden).toBe(false);
+    expect($("#room-viewer-video").hidden).toBe(true);
+    expect($("#room-viewer-name").textContent).toBe("foto.jpg");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(viewer.hidden).toBe(true);
+    expect($("#room-modal").classList.contains("open")).toBe(true);
+    expect($("#room-viewer-img").hasAttribute("src")).toBe(false);
+    $("#room-viewer-video").dispatchEvent(new Event("error"));
+    expect($("#room-viewer-fail").hidden).toBe(true);
+    click(button(rows[1], "Ver"));
+    await tick(0);
+    expect($("#room-viewer-video").src).toBe(previews.v.url);
+    expect($("#room-viewer-video").hidden).toBe(false);
+    $("#room-viewer-video").dispatchEvent(new Event("error"));
+    expect($("#room-viewer-video").hidden).toBe(true);
+    expect($("#room-viewer-fail").hidden).toBe(false);
+    click($("#room-viewer-open"));
+    expect(api.room_open).toHaveBeenCalledWith("v");
+    click($(".room-viewer-backdrop"));
+    expect(viewer.hidden).toBe(true);
+    expect(pause).toHaveBeenCalled();
+    click(button(rows[1], "Ver"));
+    await tick(0);
+    click($("#room-viewer .room-viewer-body [data-vclose]"));
+    expect(viewer.hidden).toBe(true);
+    previews.v = {};
+    click(button(rows[1], "Ver"));
+    await tick(0);
+    expect(viewer.hidden).toBe(true);
+    previews.v = { kind: "video", name: "clip.mp4", url: "http://127.0.0.1:9/b/clip.mp4" };
+    click(button(rows[1], "Ver"));
+    await tick(0);
+    click($("#room-modal .modal-backdrop"));
+    expect(viewer.hidden).toBe(true);
+    expect($("#room-modal").classList.contains("open")).toBe(false);
+    pause.mockRestore();
   });
 });

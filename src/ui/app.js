@@ -1438,6 +1438,8 @@ const room = (() => {
   let risky = null;
   let named = false;
   let drawn = "";
+  let viewing = null;
+  const rates = new Map();
 
   function describe(item) {
     const count = item.kind === "folder" ? ` · ${item.count} ${item.count === 1 ? "arquivo" : "arquivos"}` : "";
@@ -1458,50 +1460,139 @@ const room = (() => {
     parent.append(b);
   }
 
-  function itemRow(item, side) {
+  function mediaKind(name) {
+    if (/\.(jpe?g|jfif|png|webp|gif|bmp)$/i.test(name)) return "image";
+    return /\.(mp4|m4v|mov|mkv|webm|avi|3gp|wmv)$/i.test(name) ? "video" : "";
+  }
+
+  function speedOf(id, p) {
+    const now = Date.now();
+    const last = rates.get(id);
+    let speed = last?.speed || 0;
+    if (last && now > last.t && p.done >= last.done) {
+      const current = ((p.done - last.done) * 1000) / (now - last.t);
+      speed = speed ? speed * 0.6 + current * 0.4 : current;
+    }
+    rates.set(id, { done: p.done, t: now, speed });
+    return speed;
+  }
+
+  function progressText(item, p, words) {
+    if (p.state === "waiting") return words.waiting;
+    const pct = p.total ? Math.floor((p.done / p.total) * 100) : 0;
+    const parts = [`${words.sending} ${pct}%`, `${size(p.done)} de ${size(p.total)}`];
+    const speed = speedOf(item.id, p);
+    if (speed >= 1) {
+      parts.push(`${size(speed)}/s`);
+      parts.push(`${fmtDuration((p.total - p.done) / speed) || "0:00"} restante`);
+    }
+    if (p.files > 1) parts.push(`${p.finished} de ${p.files} arquivos`);
+    return parts.join(" · ");
+  }
+
+  function createRow(item, side) {
     const li = document.createElement("li");
-    li.className = "room-item";
-    const tag = item.risky ? '<span class="room-tag">programa</span>' : "";
-    li.innerHTML = `<span class="room-item-icon">${item.kind === "folder" ? FOLDER_ICON : FILE_ICON}</span><div class="room-item-meta"><div class="room-item-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>${tag}</div><small></small></div>`;
-    const small = li.querySelector("small");
+    li.dataset.id = item.id;
+    li.innerHTML = `<span class="room-thumb">${item.kind === "folder" ? FOLDER_ICON : FILE_ICON}<img alt="" draggable="false" /><svg class="room-ring" viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="21"/><circle class="bar" cx="24" cy="24" r="21"/></svg></span><div class="room-item-meta"><div class="room-item-name"><strong></strong></div><small></small></div><div class="room-actions"></div>`;
+    const img = li.querySelector("img");
+    img.addEventListener("load", () => li.classList.add("has-thumb"));
+    li.querySelector(".room-thumb").addEventListener("click", () => {
+      if (li.classList.contains("can-view")) preview(li.dataset.id);
+    });
+    if (side === "theirs") {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.addEventListener("change", () => {
+        if (box.checked) selected.add(item.id);
+        else selected.delete(item.id);
+        tools();
+      });
+      li.prepend(box);
+    }
+    return li;
+  }
+
+  function fillRow(li, item, side) {
     const p = item.progress;
     const words =
       side === "theirs"
         ? { done: "Recebido", sending: "Recebendo", waiting: "Na fila", error: "Não deu para receber" }
         : { done: "Enviado", sending: "Enviando", waiting: "Pedido, já vai começar", error: "Não deu para enviar" };
+    const viewable = side === "theirs" && p?.state === "done" && item.kind === "file" && !!mediaKind(item.name);
+    li.className = `room-item${p ? ` ${p.state}` : ""}${viewable ? " can-view" : ""}${li.classList.contains("has-thumb") ? " has-thumb" : ""}`;
+    const thumb = li.querySelector(".room-thumb");
+    thumb.dataset.kind = item.kind;
+    thumb.title = viewable ? "Ver aqui" : "";
+    const img = li.querySelector("img");
+    if (item.thumb && img.dataset.src !== item.thumb) {
+      img.dataset.src = item.thumb;
+      img.src = item.thumb;
+    }
+    const name = li.querySelector(".room-item-name");
+    name.innerHTML = `<strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>${item.risky ? '<span class="room-tag">programa</span>' : ""}`;
+    const small = li.querySelector("small");
+    small.className = "";
     let info = describe(item);
     if (item.owner) info += ` · de ${item.owner}`;
     if (item.fetched?.length) info += ` · baixado por ${item.fetched.join(", ")}`;
-    small.textContent = info;
     if (p?.state === "done") {
-      small.textContent = `${words.done} · ${describe(item)}`;
+      info = `${words.done} · ${describe(item)}`;
       small.className = "ok";
     } else if (p?.state === "error") {
-      small.textContent = p.error || words.error;
+      info = p.error || words.error;
       small.className = "bad";
     } else if (p) {
-      const pct = p.total ? Math.floor((p.done / p.total) * 100) : 0;
-      small.textContent =
-        p.state === "waiting" ? words.waiting : `${words.sending} ${pct}% · ${size(p.done)} de ${size(p.total)}`;
-      small.insertAdjacentHTML("afterend", `<div class="room-item-bar"><i style="width:${pct}%"></i></div>`);
+      info = progressText(item, p, words);
     }
+    small.textContent = info;
+    const fraction = p?.state === "done" ? 1 : p?.total ? p.done / p.total : 0;
+    li.querySelector(".room-ring .bar").style.strokeDashoffset = CIRC * (1 - fraction);
+    const actions = li.querySelector(".room-actions");
+    actions.replaceChildren();
     if (side === "mine") {
-      addButton(li, "Tirar", "ghost", () => act(api().room_remove(item.id)));
-      return li;
+      addButton(actions, "Tirar", "ghost", () => act(api().room_remove(item.id)));
+      return;
     }
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = selected.has(item.id);
-    box.setAttribute("aria-label", `Selecionar ${item.name}`);
-    box.addEventListener("change", () => {
-      if (box.checked) selected.add(item.id);
-      else selected.delete(item.id);
-      tools();
+    li.querySelector("input").checked = selected.has(item.id);
+    li.querySelector("input").setAttribute("aria-label", `Selecionar ${item.name}`);
+    if (viewable) addButton(actions, "Ver", "ghost", () => preview(item.id));
+    if (p?.state === "done") addButton(actions, "Mostrar", "ghost", () => api().room_reveal(item.id));
+    else if (!p || p.state === "error") addButton(actions, "Baixar", "ghost", () => download([item.id]));
+  }
+
+  function syncList(list, items, side, empty) {
+    const ids = new Set(items.map((i) => i.id));
+    [...list.children].forEach((li) => ids.has(li.dataset.id) || li.remove());
+    items.forEach((item, n) => {
+      const li = [...list.children].find((el) => el.dataset.id === item.id) || createRow(item, side);
+      fillRow(li, item, side);
+      if (list.children[n] !== li) list.insertBefore(li, list.children[n] || null);
     });
-    li.prepend(box);
-    if (p?.state === "done") addButton(li, "Mostrar", "ghost", () => api().room_reveal(item.id));
-    else if (!p || p.state === "error") addButton(li, "Baixar", "ghost", () => download([item.id]));
-    return li;
+    if (!items.length) list.innerHTML = `<li class="room-empty">${empty}</li>`;
+  }
+
+  async function preview(id) {
+    const info = await api().room_preview(id);
+    if (!info?.url) return;
+    viewing = id;
+    const img = $("#room-viewer-img");
+    const video = $("#room-viewer-video");
+    img.hidden = info.kind !== "image";
+    video.hidden = info.kind !== "video";
+    $("#room-viewer-fail").hidden = true;
+    if (info.kind === "image") img.src = info.url;
+    else video.src = info.url;
+    $("#room-viewer-name").textContent = info.name;
+    $("#room-viewer").hidden = false;
+  }
+
+  function closeViewer() {
+    const video = $("#room-viewer-video");
+    video.pause();
+    video.removeAttribute("src");
+    $("#room-viewer-img").removeAttribute("src");
+    $("#room-viewer").hidden = true;
+    viewing = null;
   }
 
   function personRow(person) {
@@ -1579,12 +1670,8 @@ const room = (() => {
       list.innerHTML = '<div class="dev-empty">Ninguém entrou ainda. Mande o link e o código pelo WhatsApp.</div>';
     const ids = new Set(state.theirs.map((i) => i.id));
     selected.forEach((id) => ids.has(id) || selected.delete(id));
-    $("#room-theirs").replaceChildren(...state.theirs.map((i) => itemRow(i, "theirs")));
-    if (!state.theirs.length)
-      $("#room-theirs").innerHTML = '<li class="room-empty">Nada para receber ainda. Os arquivos aparecem aqui.</li>';
-    $("#room-mine").replaceChildren(...state.mine.map((i) => itemRow(i, "mine")));
-    if (!state.mine.length)
-      $("#room-mine").innerHTML = '<li class="room-empty">Adicione arquivos ou pastas para mandar.</li>';
+    syncList($("#room-theirs"), state.theirs, "theirs", "Nada para receber ainda. Os arquivos aparecem aqui.");
+    syncList($("#room-mine"), state.mine, "mine", "Adicione arquivos ou pastas para mandar.");
     $("#room-theirs-count").textContent = state.theirs.length ? String(state.theirs.length) : "";
     $("#room-mine-count").textContent = state.mine.length ? String(state.mine.length) : "";
     tools();
@@ -1622,6 +1709,7 @@ const room = (() => {
   }
 
   function close() {
+    if (viewing) closeViewer();
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
     clearInterval(timer);
@@ -1695,12 +1783,20 @@ const room = (() => {
     if (state.phase === "open" && carriesFiles(e)) showTab("mine");
   });
   modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
+  modal.querySelectorAll("[data-vclose]").forEach((el) => el.addEventListener("click", closeViewer));
+  $("#room-viewer-open").addEventListener("click", () => api().room_open(viewing));
+  $("#room-viewer-video").addEventListener("error", () => {
+    if (!viewing) return;
+    $("#room-viewer-video").hidden = true;
+    $("#room-viewer-fail").hidden = false;
+  });
   document.addEventListener(
     "keydown",
     (e) => {
       if (e.key === "Escape" && modal.classList.contains("open")) {
         e.stopPropagation();
-        close();
+        if (viewing) closeViewer();
+        else close();
       }
     },
     true,
