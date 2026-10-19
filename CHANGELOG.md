@@ -5,15 +5,15 @@
 
 ### ✨ Novidades
 
-* arrastar e soltar arquivos e pastas na sala de troca ([#28](https://github.com/Kaique292/salvai/issues/28)) ([93ef0f1](https://github.com/Kaique292/salvai/commit/93ef0f185da2c865ef743d8553355c5dcc28e5b6))
-* miniaturas, progresso animado e visualizador na sala de troca ([#30](https://github.com/Kaique292/salvai/issues/30)) ([546af36](https://github.com/Kaique292/salvai/commit/546af3618b4c8fe8abdc7d21ee3faf4b0bcb73b2))
+* arrastar e soltar arquivos e pastas na sala de troca ([#28](https://github.com/Kaique292/salvai/issues/28)) ([56f8094](https://github.com/Kaique292/salvai/commit/56f809410623c4170776b56451377fd478b46499))
+* miniaturas, progresso animado e visualizador na sala de troca ([#30](https://github.com/Kaique292/salvai/issues/30)) ([f25728e](https://github.com/Kaique292/salvai/commit/f25728ec297124dbbcfc2ced2307686e0161d072))
 
 ## [1.6.0](https://github.com/Kaique292/salvai/compare/v1.5.0...v1.6.0) (2026-10-19)
 
 
 ### ✨ Novidades
 
-* converte na hora os vídeos que o celular não toca ao assistir pelo modo celular ([#27](https://github.com/Kaique292/salvai/issues/27)) ([15064a0](https://github.com/Kaique292/salvai/commit/15064a049472d5e6cd94335aa0ce8bcbe4d09b1c))
+* converte na hora os vídeos que o celular não toca ao assistir pelo modo celular ([#27](https://github.com/Kaique292/salvai/issues/27)) ([96fe903](https://github.com/Kaique292/salvai/commit/96fe903d787c92385fe1c0c8ec80b218bd0008fb))
 
 ## [1.5.0](https://github.com/Kaique292/salvai/compare/v1.4.0...v1.5.0) (2026-10-19)
 
