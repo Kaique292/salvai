@@ -385,6 +385,7 @@ describe("assistir no celular", () => {
   test("toca o vídeo pelo ícone e fecha parando tudo", async () => {
     await openFiles();
     document.querySelector('[data-play="v1"]').click();
+    await settle();
     const video = $("#player-video");
     expect($("#player").hidden).toBe(false);
     expect($("#player-title").textContent).toBe("Aula <1>.mp4");
@@ -403,6 +404,7 @@ describe("assistir no celular", () => {
     await openFiles();
     document.querySelector('[data-more="m1"]').click();
     press("Ouvir no celular");
+    await settle();
     expect($("#sheet").classList.contains("show")).toBe(false);
     expect($("#player").classList.contains("audio")).toBe(true);
     expect($("#player-video").getAttribute("src")).toBe("/api/file?id=m1");
@@ -419,6 +421,32 @@ describe("assistir no celular", () => {
     $("#player-video").dispatchEvent(new Event("error"));
     document.querySelector('[data-play="v1"]').click();
     expect($("#player-error").textContent).toBe("");
+  });
+
+  test("usa a versão convertida pelo PC quando o celular não toca o original", async () => {
+    const { calls } = await openFiles({ "/api/play": { direct: false, stream: "/api/stream/index.m3u8?t=abc" } });
+    document.querySelector('[data-play="v1"]').click();
+    await settle();
+    expect(calls.some((c) => c.path === "/api/play?id=v1")).toBe(true);
+    expect($("#player-video").getAttribute("src")).toBe("/api/stream/index.m3u8?t=abc");
+  });
+
+  test("se o PC não responde, tenta o arquivo original", async () => {
+    await openFiles({ "/api/play": { status: 500, body: {} } });
+    document.querySelector('[data-play="v1"]').click();
+    await settle();
+    expect($("#player-video").getAttribute("src")).toBe("/api/file?id=v1");
+  });
+
+  test("fechar antes do PC responder não começa a tocar", async () => {
+    let answer;
+    await openFiles({ "/api/play": () => new Promise((resolve) => (answer = resolve)) });
+    document.querySelector('[data-play="v1"]').click();
+    $("#player-close").click();
+    answer({ direct: true });
+    await settle();
+    expect($("#player-video").hasAttribute("src")).toBe(false);
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
 });
 
