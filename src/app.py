@@ -3641,11 +3641,14 @@ class Api:
         except Exception:
             pass
 
-    def _quit(self):
+    def _stop_all(self):
         self._quitting = True
         self._phone.stop()
         self.room_close()
         self._tray.stop()
+
+    def _quit(self):
+        self._stop_all()
         self._window.destroy()
 
     def _on_main_closed(self):
@@ -4432,6 +4435,7 @@ class Api:
             args = [sys.executable]
         else:
             args = [sys.executable, str(Path(__file__).resolve())]
+        self._stop_all()
         subprocess.Popen(args, close_fds=True, creationflags=0x00000008, env=fresh_env())
         threading.Timer(0.3, self._window.destroy).start()
 
