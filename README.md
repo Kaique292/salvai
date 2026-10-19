@@ -48,7 +48,8 @@
 - **Armazenamento transparente.** Veja quanto espaço o app usa, o que é cada coisa e limpe o cache com um clique.
 - **Tema claro e escuro**, com uma transição suave.
 - **Salvaí no celular.** Ligue o modo celular, aponte a câmera para o QR code e peça downloads pelo celular — depois salve os arquivos direto nele. Download interrompido continua de onde parou.
-- **Continua trabalhando na bandeja.** Fechou a janela com downloads em andamento ou com o modo celular ligado? O Salvaí vai para a bandeja, avisa com uma notificação e segue trabalhando.
+- **Sala de troca.** Troque arquivos e pastas de qualquer tamanho com um amigo em outra rede, nos dois sentidos. Ele entra pelo navegador do celular ou do PC, sem instalar nada.
+- **Continua trabalhando na bandeja.** Fechou a janela com downloads em andamento, com o modo celular ligado ou com uma sala de troca aberta? O Salvaí vai para a bandeja, avisa com uma notificação e segue trabalhando.
 - **Funciona com o Claude.** Peça para o Claude buscar e baixar vídeos e músicas por você, já organizados em pastas.
 
 ## 📸 Telas
@@ -153,6 +154,26 @@ Quer mandar o acesso para outra pessoa da casa? Toque em **WhatsApp**, ao lado d
 
 </details>
 
+## 🔁 Sala de troca
+
+Mande e receba arquivos e pastas com quem está em **outra rede** — outra casa, outra cidade, no 4G. Sem cadastro, sem limite de tamanho e sem subir nada para a nuvem: o arquivo vai direto de um computador para o outro.
+
+1. No app, clique no ícone de **duas setas** e em **Criar sala**.
+2. Toque em **WhatsApp** (ou **Copiar**) para mandar o **link** e o **código** da sala.
+3. Quando a pessoa entrar, aparece um aviso: clique em **Deixar entrar**.
+4. Cada um adiciona os arquivos e pastas que quer mandar e escolhe o que quer baixar — ou **Baixar tudo**.
+
+- **Quem recebe não precisa instalar nada:** a sala abre no navegador do celular ou do PC. Se a pessoa também tiver o Salvaí, ela entra por **Sala de troca → Entrar numa sala**, colando o link e o código.
+- **Nos dois sentidos:** você vê o que cada convidado adicionou e baixa para a pasta que escolher; os convidados veem e baixam o que você adicionou.
+- **Só sai o que for pedido:** os arquivos ficam no aparelho de quem adicionou até alguém clicar em baixar.
+- **Pastas inteiras:** no Salvaí, a pasta chega com a mesma estrutura. No navegador do PC (Chrome e Edge), a pessoa escolhe uma pasta e recebe tudo do mesmo jeito; nos outros navegadores e no celular, a pasta chega num `.zip`.
+- **Continua de onde parou:** se a conexão cair, o download continua de onde parou. No navegador, quem está enviando precisa deixar a aba aberta; se fechar, basta adicionar o mesmo arquivo de novo para continuar.
+- **Pode fechar a janela:** a sala continua aberta na bandeja, junto com os downloads normais.
+- **Programas pedem confirmação:** arquivos como `.exe`, `.bat`, `.msi` e `.ps1` aparecem marcados e só são baixados depois de você confirmar.
+
+> [!NOTE]
+> A velocidade depende da internet de **quem envia**. O link passa por um túnel gratuito da Cloudflare (o Salvaí baixa o conector oficial na primeira vez, conferido pelo SHA-256), que não tem garantia de estabilidade. A sala fecha quando você clica em **Fechar sala**, quando o Salvaí é fechado ou depois de 30 minutos sem uso.
+
 ## 🤖 Usando com o Claude
 
 O Salvaí traz um conector **MCP** que deixa o Claude buscar, baixar e organizar vídeos e músicas para você. Exemplo:
@@ -226,7 +247,8 @@ Os vídeos não passam pelo cache: vão direto para a pasta escolhida, e os peda
 - **Sem telemetria:** nada sobre o seu uso sai do seu PC.
 - **Contas criptografadas** pelo Windows, e o app nunca vê sua senha.
 - **Modo celular protegido:** desligado por padrão, desliga sozinho após 30 minutos sem uso, só aceita aparelhos da sua rede com o código do QR e só entrega arquivos de mídia.
-- **Atualizações conferidas:** cada arquivo baixado (app, motor de download e Deno) é verificado pelo SHA-256 oficial antes de ser usado.
+- **Sala de troca protegida:** só entra quem tem o código e é aprovado por você, só aparece o que for adicionado à sala e ela fecha sozinha após 30 minutos sem uso.
+- **Atualizações conferidas:** cada arquivo baixado (app, motor de download, Deno e conector da Cloudflare) é verificado pelo SHA-256 oficial antes de ser usado.
 
 Os detalhes, os limites conhecidos e como reportar uma falha estão em [SECURITY.md](SECURITY.md).
 
@@ -296,6 +318,7 @@ As versões e o [CHANGELOG](CHANGELOG.md) são gerados pelo [release-please](htt
 **Salvaí** is a free, ad-free **YouTube, Instagram, TikTok, X and Facebook video downloader for Windows**. Paste a link and save it as **MP4 video (up to 4K)** or **MP3 audio (up to 320 kbps)** — it also supports 1,800+ other sites, playlists, a download queue with priorities, and private content from accounts you connect.
 
 - **Phone mode:** scan a QR code to send links to your PC, stream what was downloaded and save it to your phone over Wi-Fi — no app to install.
+- **Exchange room:** swap files and whole folders both ways with a friend on another network through a private link and code — they join from any browser, no install.
 - **Claude integration (MCP):** ask Claude to search, download and organize videos and music into folders.
 - **Single `.exe`, no install**, no telemetry, updates verified by SHA-256.
 
