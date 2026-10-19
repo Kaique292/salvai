@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/Kaique292/salvai/compare/v1.4.0...v1.5.0) (2026-10-19)
+
+
+### ✨ Novidades
+
+* enviar fotos, vídeos e arquivos do celular para o PC ([#24](https://github.com/Kaique292/salvai/issues/24)) ([4f943f8](https://github.com/Kaique292/salvai/commit/4f943f88e73053aa9b9d8ef8fa35e8086752c6d6))
+
 ## [1.4.0](https://github.com/Kaique292/salvai/compare/v1.3.0...v1.4.0) (2026-10-19)
 
 
