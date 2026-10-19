@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from conftest import FakeWindow, app, http_request, json_body, wait_until
+from conftest import FakeEvent, FakeWindow, app, http_request, json_body, wait_until
 
 
 class RoomApi:
@@ -1011,6 +1011,48 @@ def test_api_room_actions(api, tmp_path, monkeypatch):
     assert opened[-2] == folder and opened[-1][0] == "explorer"
     api._room = None
     api.room_reveal("d")
+
+
+def test_api_room_drop(api, monkeypatch):
+    elements = {}
+
+    class Modal:
+        def __init__(self):
+            self.events = types.SimpleNamespace(drop=FakeEvent())
+
+    api._window.dom = types.SimpleNamespace(get_element=elements.get)
+    api._on_loaded()
+    elements["#room-modal"] = modal = Modal()
+    api._on_loaded()
+    handler = modal.events.drop.handlers[0]
+    assert handler.prevent_default and handler.callback == api._on_room_drop
+
+    added = []
+
+    def add_paths(paths):
+        if "ruim" in paths[0]:
+            raise ValueError("A sala já tem itens demais.")
+        added.append(paths)
+
+    api._room = types.SimpleNamespace(
+        phase="open",
+        add_paths=add_paths,
+        status=lambda: {"role": "host", "phase": "open"},
+        close=lambda reason="": None,
+    )
+    api._on_room_drop({"dataTransfer": {"files": [{"name": "a.mp4"}]}})
+    api._on_room_drop({})
+    assert added == [] and api._window.js == []
+    files = [{"name": "a.mp4", "pywebviewFullPath": "C:/v/a.mp4"}, {"name": "Fotos", "pywebviewFullPath": "C:/Fotos"}]
+    api._on_room_drop({"dataTransfer": {"files": files}})
+    assert added == [["C:/v/a.mp4", "C:/Fotos"]]
+    assert api._window.js[-1].endswith('app.roomDropped({"role": "host", "phase": "open"})')
+    bad = {"dataTransfer": {"files": [{"name": "ruim", "pywebviewFullPath": "C:/ruim"}]}}
+    api._window.fail.add("run_js")
+    api._on_room_drop(bad)
+    api._window.fail.clear()
+    api._on_room_drop(bad)
+    assert len(added) == 1 and "itens demais" in api._window.js[-1]
 
 
 def test_api_closing_with_room(api, monkeypatch):

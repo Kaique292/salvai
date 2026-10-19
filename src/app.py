@@ -60,6 +60,7 @@ from PIL import Image
 
 splash_step(68, "Carregando a interface…")
 import webview
+from webview.dom import DOMEventHandler
 
 splash_step(76, "Carregando o motor de download…")
 
@@ -495,6 +496,11 @@ def friendly_error(e, url: str) -> tuple[str, str]:
         return "novideo", "Não encontrei vídeo nesse link — pode ser só foto ou texto."
     if any(m in low for m in ("unavailable", "removed", "404", "does not exist", "not found", "deleted")):
         return "unavailable", "Conteúdo indisponível: foi removido ou o link está errado."
+    if "403" in low or "forbidden" in low:
+        return "blocked", (
+            f"O {name} recusou o download desse vídeo agora. Tente de novo em alguns minutos; "
+            "se usar VPN, desligue e tente outra vez."
+        )
     if "geo" in low or "your country" in low:
         return "geo", "Esse conteúdo está bloqueado na sua região."
     if "please report this issue" in full or "unexpected response" in full or "unable to extract" in full:
@@ -3795,6 +3801,22 @@ class Api:
         paths = [result] if isinstance(result, str) else list(result)
         return self._room_call(lambda room: room.add_paths(paths))
 
+    def _on_loaded(self):
+        modal = self._window.dom.get_element("#room-modal")
+        if modal:
+            modal.events.drop += DOMEventHandler(self._on_room_drop, prevent_default=True)
+
+    def _on_room_drop(self, event: dict):
+        files = (event.get("dataTransfer") or {}).get("files") or []
+        paths = [f["pywebviewFullPath"] for f in files if f.get("pywebviewFullPath")]
+        if not paths:
+            return
+        status = self._room_call(lambda room: room.add_paths(paths))
+        try:
+            self._window.run_js(f"window.app && app.roomDropped && app.roomDropped({json.dumps(status)})")
+        except Exception:
+            pass
+
     def room_remove(self, item_id: str) -> dict:
         return self._room_call(lambda room: room.remove_item(item_id))
 
@@ -4446,7 +4468,15 @@ class Api:
             opts["postprocessor_hooks"] = [pp_hook]
             with make_ydl(opts) as ydl:
                 if youtube:
-                    result = ydl.process_ie_result(info, download=True)
+                    try:
+                        result = ydl.process_ie_result(info, download=True)
+                    except Exception as e:
+                        # Links do googlevideo expiram e ficam presos ao IP de quem buscou: renova e tenta mais uma vez
+                        if item["_cancel"] or "403" not in str(e):
+                            raise
+                        item["_info"] = None
+                        info = copy.deepcopy(self._ensure_info(item))
+                        result = ydl.process_ie_result(info, download=True)
                 else:
                     result = ydl.extract_info(item["url"], download=True)
                     item["title"] = item["title"] or result.get("title")
@@ -4519,6 +4549,7 @@ def main():
     )
     api._window = window
     window.events.shown += api._on_shown
+    window.events.loaded += api._on_loaded
     window.events.closed += api._on_main_closed
     window.events.closing += api._on_closing
     bridge = Bridge(api)
