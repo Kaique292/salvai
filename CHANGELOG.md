@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/Kaique292/salvai/compare/v1.3.0...v1.4.0) (2026-10-19)
+
+
+### ✨ Novidades
+
+* adiciona a sala de troca para mandar e receber arquivos e pastas com quem está em outra rede ([2fcdf2c](https://github.com/Kaique292/salvai/commit/2fcdf2cb54f17ed8fad967b1388cfc9fb933959e))
+
+
+### 📝 Documentação
+
+* explica a sala de troca no README, na política de segurança e no site ([dd68ecb](https://github.com/Kaique292/salvai/commit/dd68ecbe504f0150ba4356fc7fabdcc4feba34b1))
+
 ## [1.3.0](https://github.com/Kaique292/salvai/compare/v1.2.2...v1.3.0) (2026-10-18)
 
 
