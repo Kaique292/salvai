@@ -777,6 +777,57 @@ describe("aparelhos conectados", () => {
   });
 });
 
+describe("recebidos do celular", () => {
+  beforeEach(() => {
+    vi.setSystemTime(NOW * 1000);
+  });
+
+  async function openReceived(state, overrides = {}) {
+    const result = await setup({ phone_status: async () => state, ...overrides });
+    click($("#phone-btn"));
+    await tick(0);
+    click($('.phone-tabs button[data-ptab="received"]'));
+    return result;
+  }
+
+  test("lista o que chegou, mostra o progresso e abre no Explorer", async () => {
+    const state = phoneState({
+      received: [
+        { id: "r1", name: "<foto>.jpg", size: 2516582, device: "iPhone", at: NOW - 120 },
+        { id: "r2", name: "nota.txt", size: 500, device: "Android", at: NOW - 10 },
+      ],
+      incoming: { files: 3, done: 25, total: 100 },
+    });
+    const { api } = await openReceived(state);
+    expect($("#phone-pane-received").hidden).toBe(false);
+    expect($("#phone-pane-devices").hidden).toBe(true);
+    expect($("#received-count").textContent).toBe("2");
+    const rows = [...document.querySelectorAll("#received-list .dev-row")];
+    expect(rows[0].querySelector("strong").textContent).toBe("<foto>.jpg");
+    expect(rows[0].querySelector("small").textContent).toBe("2,4 MB · de iPhone · há 2 min");
+    expect(rows[1].querySelector("small").textContent).toBe("500 B · de Android · agora há pouco");
+    expect($("#received-incoming").hidden).toBe(false);
+    expect($("#received-incoming-text").textContent).toBe("Recebendo 3 arquivos do celular · 25%");
+    expect($("#received-incoming-bar").style.width).toBe("25%");
+    click(rows[1].querySelector("button"));
+    expect(api.phone_open_received).toHaveBeenCalledWith("r2");
+    click($("#received-folder"));
+    expect(api.phone_open_inbox).toHaveBeenCalledTimes(1);
+  });
+
+  test("mostra um arquivo chegando e o vazio quando nada chegou", async () => {
+    await openReceived(phoneState({ incoming: { files: 1, done: 1, total: 2 } }));
+    expect($("#received-incoming-text").textContent).toBe("Recebendo 1 arquivo do celular · 50%");
+    expect($("#received-list .dev-empty").textContent).toBe("Nada recebido do celular ainda");
+    expect($("#received-count").textContent).toBe("");
+  });
+
+  test("esconde o progresso quando nada está chegando", async () => {
+    await openReceived(phoneState({ received: [], incoming: null }));
+    expect($("#received-incoming").hidden).toBe(true);
+  });
+});
+
 describe("o que muda entre as versões", () => {
   const NOTES = {
     ok: true,

@@ -434,7 +434,7 @@ describe("envio de link", () => {
     const add = calls.find((c) => c.path === "/api/add");
     expect(add.options.method).toBe("POST");
     expect(add.options.cache).toBe("no-cache");
-    expect(add.options.headers).toEqual({ "Content-Type": "application/json" });
+    expect(add.options.headers).toEqual({ "X-Salvai": "1", "Content-Type": "application/json" });
     expect(JSON.parse(add.options.body)).toEqual({ url: "https://youtu.be/x", format: "MP3", quality: "192" });
     expect($("#url").value).toBe("");
     expect($("#form-msg").className).toBe("form-msg ok");
@@ -473,5 +473,246 @@ describe("dica do iPhone", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Linux; Android 14)");
     await boot();
     expect($("#ios-tip").classList.contains("show")).toBe(false);
+  });
+});
+
+describe("enviar para o PC", () => {
+  const fakeFile = (name, size) => ({ name, size, slice: (a, b) => `${name}:${a}-${b}` });
+  const rows = () => [...document.querySelectorAll("#send-list .send-row")];
+  const puts = (calls) => calls.filter((c) => c.path.startsWith("/api/upload"));
+
+  function choose(files) {
+    const input = $("#send-input");
+    Object.defineProperty(input, "files", { configurable: true, get: () => files });
+    input.dispatchEvent(new Event("change"));
+  }
+
+  function planner(chunk = 4) {
+    let n = 0;
+    return (path, options) => ({
+      chunk,
+      uploads: JSON.parse(options.body).files.map(() => ({ id: `j${n++}`, offset: 0 })),
+    });
+  }
+
+  function receiver() {
+    return (path, options) => {
+      const [, offset] = path.match(/offset=(\d+)/);
+      const [a, b] = options.body.split(":")[1].split("-").map(Number);
+      return { received: Number(offset) + b - a };
+    };
+  }
+
+  function lock() {
+    const release = vi.fn(async () => {});
+    const request = vi.fn(async () => ({ release }));
+    Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request } });
+    return { request, release };
+  }
+
+  afterEach(() => {
+    delete navigator.wakeLock;
+  });
+
+  test("o botão abre o seletor de arquivos", async () => {
+    await boot();
+    const spy = vi.spyOn($("#send-input"), "click").mockImplementation(() => {});
+    $("#send-btn").click();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect($("#send-panel").hidden).toBe(true);
+  });
+
+  test("não faz nada quando nenhum arquivo é escolhido", async () => {
+    const { calls } = await boot();
+    choose([]);
+    await settle();
+    expect(calls.some((c) => c.path === "/api/send")).toBe(false);
+  });
+
+  test("envia em pedaços, mostra o progresso e segura a tela acesa", async () => {
+    const { request, release } = lock();
+    let hold;
+    const { calls } = await boot({
+      "/api/send": planner(4),
+      "/api/upload": (path, options) => {
+        if (options.body === "video.mp4:4-8") return new Promise((r) => (hold = r));
+        return receiver()(path, options);
+      },
+    });
+    choose([fakeFile("video.mp4", 10)]);
+    await settle();
+    const plan = calls.find((c) => c.path === "/api/send");
+    expect(plan.options.headers).toEqual({ "X-Salvai": "1", "Content-Type": "application/json" });
+    expect(JSON.parse(plan.options.body)).toEqual({ files: [{ name: "video.mp4", size: 10 }] });
+    expect($("#send-panel").hidden).toBe(false);
+    expect($("#send-summary").textContent).toBe("Enviando 1 de 1…");
+    expect($("#send-keep").hidden).toBe(false);
+    expect($("#send-clear").hidden).toBe(true);
+    expect(rows()[0].querySelector("small").textContent).toBe("1 KB de 1 KB · 40%");
+    expect(rows()[0].querySelector(".bar span").style.width).toBe("40%");
+    expect(request).toHaveBeenCalledWith("screen");
+    const first = puts(calls)[0];
+    expect(first.path).toBe("/api/upload?t=j0&offset=0");
+    expect(first.options.method).toBe("PUT");
+    expect(first.options.headers).toEqual({ "X-Salvai": "1", "Content-Type": "application/octet-stream" });
+    hold({ received: 8 });
+    await settle();
+    expect(puts(calls).map((c) => c.options.body)).toEqual(["video.mp4:0-4", "video.mp4:4-8", "video.mp4:8-10"]);
+    expect(rows()[0].querySelector("small").className).toBe("done");
+    expect(rows()[0].querySelector("small").textContent).toBe("No computador · 1 KB");
+    expect($("#send-summary").textContent).toBe("1 arquivo enviado para o PC");
+    expect($("#send-keep").hidden).toBe(true);
+    expect($("#send-clear").hidden).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    $("#send-clear").click();
+    expect($("#send-panel").hidden).toBe(true);
+  });
+
+  test("divide listas grandes e mostra tamanhos legíveis", async () => {
+    const { calls } = await boot({ "/api/send": planner(1 << 30), "/api/upload": receiver() });
+    const files = Array.from({ length: 50 }, (_, i) => fakeFile(`f${i}.txt`, 0));
+    files.push(fakeFile("grande.mov", 3 * 1024 ** 3), fakeFile("medio.mp4", 5 * 1024 ** 2));
+    choose(files);
+    await settle();
+    expect(calls.filter((c) => c.path === "/api/send")).toHaveLength(2);
+    expect(rows()).toHaveLength(52);
+    expect(rows()[50].querySelector("small").textContent).toBe("No computador · 3,00 GB");
+    expect(rows()[51].querySelector("small").textContent).toBe("No computador · 5,0 MB");
+    expect(rows()[0].querySelector("small").textContent).toBe("No computador · 0 KB");
+    expect($("#send-summary").textContent).toBe("52 arquivos enviados para o PC");
+  });
+
+  test("ajusta a posição quando o PC já recebeu parte do arquivo", async () => {
+    let first = true;
+    const { calls } = await boot({
+      "/api/send": () => ({ chunk: 4, uploads: [{ id: "j", offset: 2 }] }),
+      "/api/upload": (path, options) => {
+        if (first) {
+          first = false;
+          return { status: 409, body: { received: 6 } };
+        }
+        return receiver()(path, options);
+      },
+    });
+    choose([fakeFile("a.bin", 8)]);
+    await settle();
+    expect(puts(calls).map((c) => c.options.body)).toEqual(["a.bin:2-6"]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(puts(calls).map((c) => c.options.body)).toEqual(["a.bin:2-6", "a.bin:6-8"]);
+    expect($("#send-summary").textContent).toBe("1 arquivo enviado para o PC");
+  });
+
+  test("tenta de novo quando a conexão cai e desiste depois de muitas falhas", async () => {
+    let failures = 1;
+    const { calls } = await boot({
+      "/api/send": planner(4),
+      "/api/upload": (path, options) => {
+        if (failures-- > 0) throw new TypeError("Failed to fetch");
+        return receiver()(path, options);
+      },
+    });
+    choose([fakeFile("a.bin", 4)]);
+    await settle();
+    expect(puts(calls)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect($("#send-summary").textContent).toBe("1 arquivo enviado para o PC");
+    failures = 21;
+    choose([fakeFile("b.bin", 4)]);
+    await vi.advanceTimersByTimeAsync(1500 * 21);
+    expect(rows()[1].querySelector("small.error").textContent).toBe(
+      "A conexão com o computador caiu. Confira o Wi-Fi.",
+    );
+    expect($("#send-summary").textContent).toBe("1 arquivo não foi enviado");
+    rows()[1].querySelector("strong").click();
+    expect(calls.filter((c) => c.path === "/api/send")).toHaveLength(2);
+    rows()[1].querySelector("[data-retry]").click();
+    await settle();
+    expect(rows()[1].querySelector("small").className).toBe("done");
+    expect(calls.filter((c) => c.path === "/api/send")).toHaveLength(3);
+  });
+
+  test("mostra o erro do PC e o erro ao preparar o envio", async () => {
+    let plans = 0;
+    await boot({
+      "/api/send": (path, options) => {
+        plans++;
+        if (plans === 2) return { status: 400, body: { error: "Falta espaço no computador." } };
+        return planner(4)(path, options);
+      },
+      "/api/upload": { status: 400, body: { error: "Esse envio não existe mais." } },
+    });
+    const many = Array.from({ length: 51 }, (_, i) => fakeFile(`f${i}.bin`, 0));
+    choose(many);
+    await settle();
+    expect(rows().filter((r) => r.querySelector("small.done"))).toHaveLength(50);
+    expect(rows()[50].querySelector("small.error").textContent).toBe("Falta espaço no computador.");
+    choose([fakeFile("x.bin", 3)]);
+    await settle();
+    expect(rows()[51].querySelector("small.error").textContent).toBe("Esse envio não existe mais.");
+    expect($("#send-summary").textContent).toBe("2 arquivos não foram enviados");
+  });
+
+  test("mostra na fila enquanto outro arquivo está sendo enviado", async () => {
+    let hold;
+    await boot({
+      "/api/send": planner(4),
+      "/api/upload": (path, options) =>
+        options.body === "a.bin:0-4" ? new Promise((r) => (hold = r)) : receiver()(path, options),
+    });
+    choose([fakeFile("a.bin", 4)]);
+    await settle();
+    choose([fakeFile("b.bin", 2048)]);
+    await settle();
+    expect(rows()[1].querySelector("small").textContent).toBe("Na fila · 2 KB");
+    expect($("#send-summary").textContent).toBe("Enviando 1 de 2…");
+    hold({ received: 4 });
+    await settle();
+    expect($("#send-summary").textContent).toBe("2 arquivos enviados para o PC");
+  });
+
+  test("pede confirmação para sair durante o envio e reacende a tela ao voltar", async () => {
+    const { request } = lock();
+    let hold;
+    await boot({ "/api/send": planner(4), "/api/upload": () => new Promise((r) => (hold = r)) });
+    const leave = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(leave()).toBe(false);
+    setHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(request).not.toHaveBeenCalled();
+    choose([fakeFile("a.bin", 4)]);
+    await settle();
+    expect(leave()).toBe(true);
+    setHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(request).toHaveBeenCalledTimes(1);
+    setHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(request).toHaveBeenCalledTimes(2);
+    hold({ received: 4 });
+    await settle();
+  });
+
+  test("funciona sem trava de tela ou quando ela falha", async () => {
+    const release = vi.fn(async () => {
+      throw new Error("já liberada");
+    });
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: { request: vi.fn().mockRejectedValueOnce(new Error("negado")).mockResolvedValue({ release }) },
+    });
+    await boot({ "/api/send": planner(4), "/api/upload": receiver() });
+    choose([fakeFile("a.bin", 4)]);
+    await settle();
+    choose([fakeFile("b.bin", 4)]);
+    await settle();
+    expect(release).toHaveBeenCalledTimes(1);
+    delete navigator.wakeLock;
+    choose([fakeFile("c.bin", 4)]);
+    await settle();
+    expect($("#send-summary").textContent).toBe("3 arquivos enviados para o PC");
   });
 });

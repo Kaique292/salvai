@@ -685,6 +685,12 @@ CREATE_NO_WINDOW = 0x08000000
 MAX_BODY = 64 * 1024
 PHONE_IDLE_LIMIT = 30 * 60
 PHONE_HISTORY_LIMIT = 20
+PHONE_INBOX = "Do celular"
+PHONE_CHUNK = 4 << 20
+PHONE_MAX_CHUNK = 16 << 20
+PHONE_SEND_BATCH = 50
+PHONE_MAX_UPLOADS = 500
+PHONE_RECEIVED_LIMIT = 30
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -976,6 +982,16 @@ class DualStackServer(ExclusiveHTTPServer):
         super().server_bind()
 
 
+def drain_body(h) -> None:
+    length = h.headers.get("Content-Length") or ""
+    remaining = int(length) if length.isdigit() and int(length) <= PHONE_MAX_CHUNK else 0
+    while remaining > 0:
+        chunk = h.rfile.read(min(1 << 20, remaining))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+
+
 class PhoneServer:
     def __init__(self, api: "Api"):
         self.api, self.server, self.token = api, None, ""
@@ -987,6 +1003,9 @@ class PhoneServer:
         self.qr: tuple[str, str] | None = None
         self.adds: deque = deque()
         self.last_activity = 0.0
+        self.uploads: dict[str, dict] = {}
+        self.received: deque = deque(maxlen=PHONE_RECEIVED_LIMIT)
+        self.upload_lock = threading.Lock()
 
     def session_for(self, sid: str) -> dict | None:
         return self.sessions.get(sid) if sid else None
@@ -1101,6 +1120,8 @@ class PhoneServer:
                 pass
 
             def _json(self, code: int, payload, revalidate: bool = False):
+                if self.command == "PUT" and not getattr(self, "body_read", False):
+                    drain_body(self)
                 body = json.dumps(payload, ensure_ascii=False).encode()
                 etag = f'"{hashlib.sha1(body).hexdigest()[:20]}"'
                 if revalidate and code == 200 and self.headers.get("If-None-Match") == etag:
@@ -1137,6 +1158,8 @@ class PhoneServer:
                 return None
 
             def _same_origin(self) -> bool:
+                if self.headers.get("X-Salvai") != "1":
+                    return False
                 origin = self.headers.get("Origin")
                 if not origin:
                     return True
@@ -1162,10 +1185,11 @@ class PhoneServer:
                         )
                     phone.failures.setdefault(ip, []).append(time.time())
                     return self._json(403, {"error": "Abra pelo QR code que aparece no Salvaí do computador."})
-                if method == "POST" and not self._same_origin():
+                if method in ("POST", "PUT") and not self._same_origin():
                     return self._json(403, {"error": "origem inválida"})
                 phone.last_activity = time.time()
                 session.update(ip=ip, seen=time.time())
+                self.session = session
                 try:
                     phone.route(self, method, url.path, query)
                 except (ConnectionError, BrokenPipeError):
@@ -1183,6 +1207,9 @@ class PhoneServer:
 
             def do_HEAD(self):
                 self._handle("HEAD")
+
+            def do_PUT(self):
+                self._handle("PUT")
 
         self.server = None
         for server_class, host in ((DualStackServer, "::"), (ExclusiveHTTPServer, "0.0.0.0")):
@@ -1209,6 +1236,120 @@ class PhoneServer:
                 active, self.sessions = list(self.sessions.values()), {}
             for session in active:
                 self.remember(session)
+            with self.upload_lock:
+                pending, self.uploads = list(self.uploads.values()), {}
+            drop_parts(pending)
+
+    def inbox(self) -> Path:
+        return Path(self.api._out_dir) / PHONE_INBOX
+
+    def plan_uploads(self, session: dict, entries) -> dict:
+        if not isinstance(entries, list) or not 1 <= len(entries) <= PHONE_SEND_BATCH:
+            raise ValueError("Escolha o que enviar.")
+        parsed = []
+        for entry in entries:
+            size = entry.get("size") if isinstance(entry, dict) else None
+            if type(size) is not int or not 0 <= size < 1 << 42:
+                raise ValueError("Arquivo inválido.")
+            parsed.append((clean_name(entry.get("name")), size))
+        inbox = self.inbox()
+        inbox.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(inbox).free < sum(size for _, size in parsed):
+            raise ValueError("Falta espaço no computador para receber esses arquivos.")
+        batch, replies, finished = secrets.token_hex(6), [], []
+        with self.upload_lock:
+            for name, size in parsed:
+                key = (session["id"], name, size)
+                same = (j for j in self.uploads.values() if (j["owner"], j["name"], j["size"]) == key)
+                job = next((j for j in same if j["batch"] != batch), None)
+                if not job:
+                    if len(self.uploads) >= PHONE_MAX_UPLOADS:
+                        raise ValueError("Envios demais de uma vez. Espere os outros terminarem.")
+                    job_id = secrets.token_hex(8)
+                    job = {
+                        "id": job_id,
+                        "owner": session["id"],
+                        "name": name,
+                        "size": size,
+                        "received": 0,
+                        "dest": inbox / name,
+                        "root": None,
+                        "part": inbox / f"{name}.{job_id}.salvai-part",
+                        "state": "waiting",
+                        "writing": False,
+                        "touched": 0.0,
+                    }
+                    self.uploads[job_id] = job
+                job.update(batch=batch, count=len(parsed), device=session["name"])
+                replies.append({"id": job["id"], "offset": job["received"]})
+                if size == 0:
+                    finished.append(self.complete(job))
+        for job in finished:
+            self.announce(job)
+        return {"uploads": replies, "chunk": PHONE_CHUNK}
+
+    def complete(self, job: dict) -> dict:
+        finish_job(job)
+        del self.uploads[job["id"]]
+        self.received.appendleft(
+            {
+                "id": job["id"],
+                "name": job["dest"].name,
+                "path": job["dest"],
+                "size": job["size"],
+                "device": job["device"],
+                "at": time.time(),
+            }
+        )
+        return job
+
+    def announce(self, job: dict):
+        last = not any(j["batch"] == job["batch"] for j in self.uploads.values())
+        self.api._phone_received(job if last else None)
+
+    def receive(self, h, session: dict, query: dict):
+        length = int(h.headers.get("Content-Length") or -1)
+        if not 0 <= length <= PHONE_MAX_CHUNK:
+            raise ValueError("Pedaço de arquivo grande demais.")
+        offset = int(query.get("offset", "-1"))
+        with self.upload_lock:
+            job = self.uploads.get(query.get("t", ""))
+            if not job or job["owner"] != session["id"]:
+                raise ValueError("Esse envio não existe mais. Escolha o arquivo de novo.")
+            if job["writing"] or offset != job["received"] or offset + length > job["size"]:
+                return h._json(409, {"received": job["received"]})
+            job.update(writing=True, state="sending", touched=time.time())
+        h.body_read = True
+        try:
+            written = write_part(job["part"], offset, h.rfile, length)
+        except OSError as e:
+            raise ValueError("Não deu para gravar o arquivo no computador.") from e
+        finally:
+            job["writing"] = False
+        with self.upload_lock:
+            job["received"], job["touched"] = offset + written, time.time()
+            done = job["received"] == job["size"]
+            if done:
+                self.complete(job)
+        if done:
+            self.announce(job)
+        h._json(200, {"received": job["received"], "done": done})
+
+    def incoming(self) -> dict | None:
+        now = time.time()
+        with self.upload_lock:
+            live = [j for j in self.uploads.values() if now - j["touched"] < 20]
+        if not live:
+            return None
+        return {
+            "files": len(live),
+            "done": sum(j["received"] for j in live),
+            "total": sum(j["size"] for j in live),
+        }
+
+    def received_file(self, entry_id: str) -> Path | None:
+        entry = next((r for r in list(self.received) if r["id"] == entry_id), None)
+        return entry["path"] if entry and entry["path"].is_file() else None
 
     def route(self, h, method: str, path: str, query: dict):
         api = self.api
@@ -1254,6 +1395,10 @@ class PhoneServer:
             return h._json(200, {"trashed": api._trash(str(read_json_body(h).get("id", "")))})
         if method == "GET" and path == "/api/files":
             return h._json(200, {"files": api._phone_files()}, revalidate=True)
+        if method == "POST" and path == "/api/send":
+            return h._json(200, self.plan_uploads(h.session, read_json_body(h).get("files")))
+        if method == "PUT" and path == "/api/upload":
+            return self.receive(h, h.session, query)
         if method in ("GET", "HEAD") and path == "/api/file":
             target = api._saved_file(query.get("id", ""))
             if not target:
@@ -1302,6 +1447,8 @@ class PhoneServer:
             "port": self.server.server_address[1],
             "devices": devices,
             "history": history,
+            "incoming": self.incoming(),
+            "received": [{key: r[key] for key in ("id", "name", "size", "device", "at")} for r in list(self.received)],
         }
 
 
@@ -3079,6 +3226,18 @@ class Api:
             pass
         self._tray.refresh()
 
+    def _phone_received(self, job: dict | None):
+        if job:
+            device = job["device"]
+            if job["count"] > 1:
+                self._tray.notify("Arquivos recebidos do celular", f"{job['count']} arquivos chegaram de {device}.")
+            else:
+                self._tray.notify("Arquivo recebido do celular", f"{job['dest'].name} chegou de {device}.")
+        try:
+            self._window.run_js("window.app && app.phoneChanged && app.phoneChanged()")
+        except Exception:
+            pass
+
     def _phone_auto_off(self):
         self._tray.refresh()
         self._tray.notify(
@@ -3307,6 +3466,18 @@ class Api:
 
     def phone_status(self) -> dict:
         return self._phone.status()
+
+    def phone_open_received(self, entry_id: str) -> bool:
+        target = self._phone.received_file(entry_id)
+        if not target:
+            return False
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(target)])
+        return True
+
+    def phone_open_inbox(self):
+        inbox = self._phone.inbox()
+        inbox.mkdir(parents=True, exist_ok=True)
+        os.startfile(inbox)
 
     def phone_allow_firewall(self) -> bool:
         port = self._phone.server.server_address[1] if self._phone.server else PHONE_PORT

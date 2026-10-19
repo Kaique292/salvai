@@ -59,6 +59,27 @@
       </form>
     </section>
 
+    <section class="card send">
+      <h2>Enviar para o PC</h2>
+      <p class="send-hint">
+        Fotos, vídeos e arquivos do celular vão direto para a pasta <b>Do celular</b>, dentro da pasta de downloads do
+        Salvaí no computador.
+      </p>
+      <input id="send-input" class="visually-hidden" type="file" multiple tabindex="-1" aria-hidden="true" />
+      <button class="secondary" type="button" id="send-btn">
+        <svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14" /></svg>
+        Escolher fotos, vídeos ou arquivos
+      </button>
+      <div class="send-panel" id="send-panel" hidden>
+        <div class="send-head">
+          <span id="send-summary"></span>
+          <button type="button" class="link-btn" id="send-clear">Limpar</button>
+        </div>
+        <p class="send-keep" id="send-keep">Deixe esta tela aberta até terminar.</p>
+        <div class="send-list" id="send-list"></div>
+      </div>
+    </section>
+
     <nav class="tabs">
       <button class="active" data-tab="downloads">Downloads</button>
       <button data-tab="files">Arquivos no PC</button>
