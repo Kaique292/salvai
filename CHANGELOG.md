@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/Kaique292/salvai/compare/v1.5.0...v1.6.0) (2026-10-19)
+
+
+### ✨ Novidades
+
+* converte na hora os vídeos que o celular não toca ao assistir pelo modo celular ([#27](https://github.com/Kaique292/salvai/issues/27)) ([15064a0](https://github.com/Kaique292/salvai/commit/15064a049472d5e6cd94335aa0ce8bcbe4d09b1c))
+
 ## [1.5.0](https://github.com/Kaique292/salvai/compare/v1.4.0...v1.5.0) (2026-10-19)
 
 
