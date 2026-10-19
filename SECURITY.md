@@ -25,6 +25,17 @@ Apenas a versão mais recente recebe correções.
 - Só entrega **arquivos de mídia** da pasta de downloads — documentos e outros arquivos nunca saem do PC — e impede acesso fora dessa pasta.
 - Envia cabeçalhos de segurança (CSP, `nosniff`, `X-Frame-Options`, `no-referrer`).
 
+### Sala de troca
+
+- Só abre quando você cria a sala e fecha quando você fecha, quando o Salvaí é fechado ou depois de 30 minutos sem uso.
+- O servidor da sala escuta só em `127.0.0.1`; quem está fora chega pelo túnel HTTPS da Cloudflare, com um endereço aleatório que muda a cada sala.
+- Para entrar é preciso o **código de 6 caracteres** da sala e a **sua aprovação**. Cada convidado recebe uma sessão própria em cookie `Secure`/`HttpOnly`/`SameSite=Strict`, e quem você tira da sala não volta com a mesma sessão.
+- Bloqueia o IP depois de 10 tentativas erradas, limita as tentativas da sala inteira e quantas pessoas podem esperar aprovação.
+- Recusa pedidos de outros sites (CSRF): todo envio exige um cabeçalho próprio e a origem certa, e o servidor só responde no endereço da sala.
+- Só entrega os arquivos e pastas que foram adicionados à sala, por número, nunca por caminho. Nomes vindos de convidados são limpos antes de virar arquivo no seu PC, sem sair da pasta que você escolheu.
+- Arquivos enviados chegam em pedaços de até 16 MB, conferidos pela posição; programas (`.exe`, `.bat`, `.msi`, `.ps1`…) aparecem marcados e pedem confirmação antes de baixar.
+- O conector da Cloudflare (`cloudflared`) só é baixado das releases oficiais e conferido pelo SHA-256 publicado nelas.
+
 ### Conector do Claude (MCP)
 
 - A ponte escuta só em `127.0.0.1`, exige um token que muda a cada abertura e recusa _DNS rebinding_.
@@ -45,5 +56,6 @@ Apenas a versão mais recente recebe correções.
 ## Limites conhecidos
 
 - **O modo celular usa HTTP sem criptografia** dentro da sua rede (HTTPS exigiria um certificado que o celular mostraria como inseguro). Em redes compartilhadas ou públicas, alguém na mesma rede poderia ver o tráfego. Use o modo celular só na rede da sua casa e desligue quando não precisar.
+- **Na sala de troca, o tráfego passa pela Cloudflare.** A conexão é HTTPS de ponta a ponta entre os aparelhos e a Cloudflare, mas a Cloudflare termina a criptografia no meio do caminho, como em qualquer site que usa o serviço dela. Para arquivos muito sensíveis, compacte com senha antes de mandar.
 - **O app não tem assinatura digital paga**, por isso o Windows pode mostrar avisos (veja o README).
 - Um programa malicioso que já esteja rodando com o seu usuário do Windows tem acesso aos mesmos arquivos que o Salvaí — nenhum app consegue se proteger disso.
