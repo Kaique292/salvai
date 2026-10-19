@@ -204,18 +204,24 @@ const player = (() => {
   const root = $("#player");
   const video = $("#player-video");
   const error = $("#player-error");
+  let opening = 0;
 
-  function open(file) {
+  async function open(file) {
+    const ticket = ++opening;
     $("#player-title").textContent = file.name;
     error.textContent = "";
     root.classList.toggle("audio", file.kind === "audio");
-    video.src = fileUrl(file.id, false);
     root.hidden = false;
     requestAnimationFrame(() => root.classList.add("show"));
+    // O PC diz se o celular toca o arquivo como está; se não, manda uma versão convertida na hora.
+    const how = await api(`/api/play?id=${encodeURIComponent(file.id)}`).catch(() => ({ direct: true }));
+    if (ticket !== opening) return;
+    video.src = how.stream || fileUrl(file.id, false);
     video.play().catch(() => {});
   }
 
   function close() {
+    opening++;
     video.pause();
     video.removeAttribute("src");
     video.load();

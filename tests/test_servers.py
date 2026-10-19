@@ -624,3 +624,151 @@ def test_api_phone_received_and_open(api, monkeypatch):
     assert api.phone_open_received("r1") is True and opened[-1][-1] == str(target)
     api.phone_open_inbox()
     assert opened[-1] == target.parent
+
+
+FFMPEG_INFO = """Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.mp4':
+  Duration: 00:02:24.71, start: 0.000000, bitrate: 9000 kb/s
+  Stream #0:0[0x1](und): Video: vp9 (Profile 0) (vp09 / 0x39307076), yuv420p(tv), 3840x2160, 30 fps (default)
+  Stream #0:1[0x2](eng): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 128 kb/s (default)
+  Stream #0:2: Video: mjpeg (Baseline), yuvj420p, 600x600 (attached pic)
+"""
+
+
+def test_probe_media_and_phone_support(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        app.subprocess, "run", lambda args, **kw: seen.append(args) or types.SimpleNamespace(stderr=FFMPEG_INFO)
+    )
+    info = app.probe_media("ffmpeg.exe", Path("a.mp4"))
+    assert info == {"duration": 144.71, "video": [("vp9", info["video"][0][1])], "audio": ["aac"]}
+    assert seen[0][:4] == ["ffmpeg.exe", "-hide_banner", "-nostdin", "-i"]
+    monkeypatch.setattr(app.subprocess, "run", lambda args, **kw: types.SimpleNamespace(stderr="nada"))
+    assert app.probe_media("ffmpeg.exe", Path("a.mp4")) == {"duration": 0.0, "video": [], "audio": []}
+    h264 = {"video": [("h264", " (High) (avc1), yuv420p")], "audio": ["aac"]}
+    supported = lambda name, info: app.plays_on_phone(Path(name), info)
+    assert supported("foto.jpg", {"video": [("mjpeg", "")], "audio": []})
+    assert supported("a.mp4", h264) and supported("a.MOV", h264)
+    assert not supported("a.mkv", h264)
+    assert not supported("a.mp4", {"video": [("h264", " (High 10), yuv420p10le")], "audio": ["aac"]})
+    assert not supported("a.mp4", {"video": [("vp9", "")], "audio": ["aac"]})
+    assert not supported("a.mp4", {"video": [("h264", "")], "audio": ["opus"]})
+    assert supported("a.mp3", {"video": [], "audio": ["mp3"]})
+    assert not supported("a.m4a", {"video": [], "audio": ["alac"]})
+
+
+class FakeFfmpeg:
+    calls: list = []
+    made = 3
+    code = None
+
+    def __init__(self, args, **kw):
+        FakeFfmpeg.calls.append(args)
+        first = int(args[args.index("-start_number") + 1])
+        pattern = args[args.index("-hls_segment_filename") + 1]
+        for n in range(first, first + FakeFfmpeg.made):
+            Path(pattern % n).write_bytes(b"ts%d" % n)
+        self.returncode = FakeFfmpeg.code
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = 1
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+@pytest.fixture
+def fake_ffmpeg(monkeypatch, no_sleep):
+    FakeFfmpeg.calls, FakeFfmpeg.made, FakeFfmpeg.code = [], 3, None
+    monkeypatch.setattr(app.subprocess, "Popen", FakeFfmpeg)
+    return FakeFfmpeg
+
+
+def test_media_stream_converts_on_demand(tmp_path, monkeypatch, fake_ffmpeg):
+    info = {"duration": 200.5, "video": [("vp9", "")], "audio": ["aac"]}
+    stream = app.MediaStream("ffmpeg.exe", tmp_path / "a.mkv", info, tmp_path / "s")
+    lines = stream.playlist().decode().splitlines()
+    assert stream.count == 51 and lines[-1] == "#EXT-X-ENDLIST" and lines[-3] == "#EXTINF:0.500,"
+    assert f"/api/stream/seg?t={stream.token}&n=0" in lines
+    assert stream.segment(-1) is None and stream.segment(51) is None
+    assert stream.segment(0).read_bytes() == b"ts0"
+    assert stream.segment(2).read_bytes() == b"ts2" and len(fake_ffmpeg.calls) == 1
+    args = fake_ffmpeg.calls[0]
+    assert "libx264" in args and args[args.index("-ss") + 1] == "0" and args[args.index("-start_number") + 1] == "0"
+    monkeypatch.setattr(app, "STREAM_WAIT", 0)
+    assert stream.segment(5) is None and len(fake_ffmpeg.calls) == 1
+    assert stream.segment(30).read_bytes() == b"ts30" and len(fake_ffmpeg.calls) == 2
+    assert fake_ffmpeg.calls[1][fake_ffmpeg.calls[1].index("-ss") + 1] == "120"
+    assert stream.segment(1).read_bytes() == b"ts1" and len(stream.runs) == 2
+    monkeypatch.setattr(app, "STREAM_AHEAD", 1)
+    assert stream.segment(30) and stream.proc is None
+    assert stream.segment(33).read_bytes() == b"ts33" and len(fake_ffmpeg.calls) == 3
+    monkeypatch.setattr(app, "STREAM_WAIT", 5)
+    fake_ffmpeg.made, fake_ffmpeg.code = 0, 0
+    assert stream.segment(45) is None and len(fake_ffmpeg.calls) == 4
+    stream.close()
+    stream.close()
+    assert not (tmp_path / "s").exists()
+    music = app.MediaStream(
+        "ffmpeg.exe", tmp_path / "a.opus", {"duration": 4, "video": [], "audio": ["opus"]}, tmp_path
+    )
+    assert music.count == 1 and "-vn" in music.command(0, tmp_path) and "libx264" not in music.command(0, tmp_path)
+
+
+def test_phone_play_streams_unsupported_files(phone, api, monkeypatch, fake_ffmpeg):
+    movie = Path(api._out_dir, "filme.mkv")
+    movie.write_bytes(b"1")
+    api._remember(str(movie))
+    key = app.file_key(movie)
+    play = lambda: phone_call(phone, "GET", f"/api/play?id={key}")
+    assert phone_call(phone, "GET", "/api/play?id=x")[0] == 400
+    monkeypatch.setattr(app, "probe_media", lambda ff, path: (_ for _ in ()).throw(OSError("sem ffmpeg")))
+    assert json_body(play()[2]) == {"direct": True}
+    info = {"duration": 0.0, "video": [("vp9", "")], "audio": ["aac"]}
+    monkeypatch.setattr(app, "probe_media", lambda ff, path: info)
+    assert json_body(play()[2]) == {"direct": True}
+    info.update(duration=10.0)
+    status, _, data = play()
+    url = json_body(data)["stream"]
+    token = phone.stream.token
+    assert status == 200 and url == f"/api/stream/index.m3u8?t={token}"
+    first = phone.stream
+    status, headers, data = phone_call(phone, "GET", url, cookie=False)
+    assert status == 200 and headers["Content-Type"] == "application/vnd.apple.mpegurl"
+    assert f"/api/stream/seg?t={token}&n=2" in data.decode()
+    assert phone_call(phone, "HEAD", url, cookie=False)[2] == b""
+    status, headers, data = phone_call(phone, "GET", f"/api/stream/seg?t={token}&n=0", cookie=False)
+    assert status == 200 and headers["Content-Type"] == "video/mp2t" and data == b"ts0"
+    assert phone_call(phone, "GET", f"/api/stream/seg?t={token}&n=9")[0] == 404
+    assert phone_call(phone, "GET", f"/api/stream/outra?t={token}")[0] == 404
+    assert phone_call(phone, "GET", "/api/stream/index.m3u8?t=errado", cookie=False)[0] == 403
+    status, _, data = phone_call(phone, "GET", "/api/stream/index.m3u8?t=errado")
+    assert status == 404 and "não está mais aberto" in json_body(data)["error"]
+    play()
+    assert phone.stream is not first and phone.stream.token != token
+    phone.end_stream(first)
+    assert phone.stream
+    token = phone.stream.token
+    phone.revoke(phone.stream_session["id"])
+    assert phone_call(phone, "GET", f"/api/stream/index.m3u8?t={token}", cookie=False)[0] == 403
+    phone.end_stream()
+    phone.end_stream()
+    assert phone.stream is None and phone.stream_owner(token) is None
+
+
+def test_phone_stop_and_idle_end_the_stream(phone, api, monkeypatch, fake_ffmpeg):
+    info = {"duration": 8.0, "video": [], "audio": ["opus"]}
+    folder = Path(api._out_dir, "stream")
+    phone.stream = app.MediaStream("ffmpeg.exe", Path("a.opus"), info, folder)
+    phone.stream.touched = 0
+    sentinel = object()
+    monkeypatch.setattr(app.time, "sleep", lambda s: setattr(phone, "server", None))
+    server, phone.server = phone.server, sentinel
+    phone.watch_idle(sentinel)
+    assert phone.stream is None and not folder.exists()
+    phone.server = server
+    phone.stream = app.MediaStream("ffmpeg.exe", Path("a.opus"), info, folder)
+    phone.stop()
+    assert phone.stream is None and not folder.exists()
