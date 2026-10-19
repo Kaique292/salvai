@@ -1401,6 +1401,29 @@ kbd {
   flex-direction: column;
   gap: 6px;
 }
+.storage-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.storage-panel > * {
+  flex: none;
+}
+.storage-panel > .st-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -10px;
+  padding-right: 10px;
+  overscroll-behavior: contain;
+}
+.storage-panel > .st-list::-webkit-scrollbar {
+  width: 8px;
+}
+.storage-panel > .st-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
 .st-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
