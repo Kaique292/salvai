@@ -85,6 +85,34 @@ def test_enqueue_and_youtube_download(api):
     assert any("app.update" in js for js in api._window.js)
 
 
+def test_youtube_403_renews_links_and_retries_once(api):
+    calls = []
+
+    def flaky(ydl, url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise RuntimeError("unable to download video data: HTTP Error 403: Forbidden")
+        return downloaded()(ydl, url)
+
+    FakeYDL.script = {"jNQXAC9IVRw": {"info": youtube_info(), "download": flaky}}
+    api.add(YT, "MP4", "Máxima")
+    assert finish(api)
+    assert item_by_url(api, YT)["status"] == "done" and len(calls) == 2
+
+
+def test_youtube_other_errors_are_not_retried(api):
+    calls = []
+
+    def broken(ydl, url):
+        calls.append(url)
+        raise RuntimeError("Video unavailable")
+
+    FakeYDL.script = {"jNQXAC9IVRw": {"info": youtube_info(), "download": broken}}
+    api.add(YT, "MP4", "Máxima")
+    assert finish(api)
+    assert item_by_url(api, YT)["status"] == "error" and len(calls) == 1
+
+
 def test_download_other_site_uses_single_extraction(api):
     FakeYDL.script = {"tiktok": {"info": {"title": "Peek"}, "download": downloaded(name="tt.mp4")}}
     api._peek_cache[TT] = (time.time(), {"title": "Do cache", "thumb": "https://t/x.jpg", "site": "TikTok"})
@@ -555,7 +583,13 @@ def test_update_app_paths(api, monkeypatch):
 def test_restart_skip_and_release(api, monkeypatch, instant_timer):
     launched, envs = [], []
     monkeypatch.setattr(app.subprocess, "Popen", lambda args, **k: (launched.append(args), envs.append(k["env"])))
+    api._tray.icon = object()
+    api._room = types.SimpleNamespace(active=True, close=lambda reason="": None)
+    stopped = []
+    monkeypatch.setattr(api._phone, "stop", lambda: stopped.append("phone"))
+    monkeypatch.setattr(api._tray, "stop", lambda: stopped.append("tray"))
     api.restart_app()
+    assert stopped == ["phone", "tray"] and api._room is None and api._on_closing() is True
     monkeypatch.setattr(app.sys, "frozen", True, raising=False)
     api.restart_app()
     assert launched[0][-1].endswith("app.py") and launched[1] == [app.sys.executable]
