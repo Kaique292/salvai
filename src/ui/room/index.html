@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e0e11" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sala de troca · Salvaí</title>
+    <link rel="stylesheet" href="/room.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="logo">
+        <svg viewBox="0 0 24 24"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5" /></svg>
+      </div>
+      <div class="brand">
+        <strong>Sala de troca</strong>
+        <span class="link-state" id="link-state"><i></i><b id="host-label">Conectando…</b></span>
+      </div>
+      <button class="ghost leave" id="leave" type="button" hidden>Sair</button>
+    </header>
+
+    <section class="card" data-view="join" hidden>
+      <h2 id="join-title">Entrar na sala</h2>
+      <p class="hint">Digite o código que veio junto com o link. Quem criou a sala vai aprovar sua entrada.</p>
+      <form id="join-form">
+        <label>
+          <span>Seu nome</span>
+          <input id="join-name" maxlength="40" autocomplete="nickname" placeholder="Como você quer aparecer" />
+        </label>
+        <label>
+          <span>Código da sala</span>
+          <input
+            id="join-code"
+            class="code"
+            maxlength="9"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="ABC 123"
+            required
+          />
+        </label>
+        <button class="primary" type="submit" id="join-btn">Entrar</button>
+        <p class="form-msg" id="join-msg"></p>
+      </form>
+    </section>
+
+    <section class="card center" data-view="wait" hidden>
+      <span class="spinner"></span>
+      <h2>Esperando aprovação</h2>
+      <p class="hint" id="wait-text">Peça para quem criou a sala aprovar sua entrada no Salvaí.</p>
+    </section>
+
+    <section class="card center" data-view="gone" hidden>
+      <h2>Você está fora da sala</h2>
+      <p class="hint" id="gone-text"></p>
+    </section>
+
+    <div data-view="room" hidden>
+      <p class="notice" id="keep-open" hidden>
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 8v5M12 16h.01" />
+        </svg>
+        <span>Deixe esta aba aberta até terminar. Se fechar, o envio continua de onde parou quando você voltar.</span>
+      </p>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 id="theirs-title">Arquivos da sala</h2>
+          <div class="head-actions">
+            <button class="ghost" type="button" id="get-selected" disabled>Baixar selecionados</button>
+            <button class="primary small" type="button" id="get-all" disabled>Baixar tudo</button>
+          </div>
+        </div>
+        <ul class="items" id="theirs"></ul>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Seus arquivos</h2>
+          <div class="head-actions">
+            <button class="ghost" type="button" id="add-files">Adicionar arquivos</button>
+            <button class="ghost" type="button" id="add-folder" hidden>Adicionar pasta</button>
+          </div>
+        </div>
+        <p class="hint">
+          Quem criou a sala escolhe o que baixar. Os arquivos só saem do seu aparelho quando forem pedidos.
+        </p>
+        <ul class="items" id="mine"></ul>
+        <input type="file" id="pick-files" multiple hidden />
+        <input type="file" id="pick-folder" webkitdirectory hidden />
+      </section>
+
+      <p class="foot">
+        A velocidade depende da internet de quem envia. O link passa por um túnel gratuito da Cloudflare e para de
+        funcionar quando a sala fecha.
+      </p>
+    </div>
+
+    <div class="sheet" id="sheet" hidden>
+      <div class="sheet-backdrop" data-answer="no"></div>
+      <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <strong id="sheet-title">Esse download tem programas</strong>
+        <p id="sheet-desc">
+          Arquivos como .exe, .bat, .msi e .ps1 podem mexer no seu aparelho. Só baixe se você confia em quem mandou.
+        </p>
+        <div class="sheet-actions">
+          <button class="ghost" type="button" data-answer="no">Cancelar</button>
+          <button class="primary small" type="button" data-answer="yes">Baixar mesmo assim</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+
+    <script src="/room.js"></script>
+  </body>
+</html>

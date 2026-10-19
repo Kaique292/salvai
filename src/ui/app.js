@@ -1376,3 +1376,285 @@ const phone = (() => {
   };
 })();
 window.app.phoneChanged = () => phone.sync();
+
+const room = (() => {
+  const modal = $("#room-modal");
+  const FILE_ICON =
+    '<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+  const FOLDER_ICON =
+    '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const BUSY_TITLES = {
+    starting: "Abrindo a sala…",
+    joining: "Entrando na sala…",
+    pending: "Esperando aprovação",
+  };
+  const selected = new Set();
+  let state = { role: null, phase: "idle" };
+  let timer = null;
+  let lastFocus = null;
+  let tab = "theirs";
+  let risky = null;
+  let named = false;
+  let drawn = "";
+
+  function size(n) {
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = n;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return `${unit ? value.toFixed(value < 10 ? 1 : 0).replace(".", ",") : value} ${units[unit]}`;
+  }
+
+  function describe(item) {
+    const count = item.kind === "folder" ? ` · ${item.count} ${item.count === 1 ? "arquivo" : "arquivos"}` : "";
+    return `${size(item.size)}${count}`;
+  }
+
+  function viewOf(phase) {
+    if (phase === "open") return "open";
+    if (phase === "closed" || phase === "error") return "ended";
+    return BUSY_TITLES[phase] ? "busy" : "start";
+  }
+
+  function addButton(parent, label, cls, fn) {
+    const b = document.createElement("button");
+    b.className = cls;
+    b.textContent = label;
+    b.addEventListener("click", fn);
+    parent.append(b);
+  }
+
+  function itemRow(item, side) {
+    const li = document.createElement("li");
+    li.className = "room-item";
+    const tag = item.risky ? '<span class="room-tag">programa</span>' : "";
+    li.innerHTML = `<span class="room-item-icon">${item.kind === "folder" ? FOLDER_ICON : FILE_ICON}</span><div class="room-item-meta"><div class="room-item-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>${tag}</div><small></small></div>`;
+    const small = li.querySelector("small");
+    const p = item.progress;
+    const words =
+      side === "theirs"
+        ? { done: "Recebido", sending: "Recebendo", waiting: "Na fila", error: "Não deu para receber" }
+        : { done: "Enviado", sending: "Enviando", waiting: "Pedido, já vai começar", error: "Não deu para enviar" };
+    let info = describe(item);
+    if (item.owner) info += ` · de ${item.owner}`;
+    if (item.fetched?.length) info += ` · baixado por ${item.fetched.join(", ")}`;
+    small.textContent = info;
+    if (p?.state === "done") {
+      small.textContent = `${words.done} · ${describe(item)}`;
+      small.className = "ok";
+    } else if (p?.state === "error") {
+      small.textContent = p.error || words.error;
+      small.className = "bad";
+    } else if (p) {
+      const pct = p.total ? Math.floor((p.done / p.total) * 100) : 0;
+      small.textContent =
+        p.state === "waiting" ? words.waiting : `${words.sending} ${pct}% · ${size(p.done)} de ${size(p.total)}`;
+      small.insertAdjacentHTML("afterend", `<div class="room-item-bar"><i style="width:${pct}%"></i></div>`);
+    }
+    if (side === "mine") {
+      addButton(li, "Tirar", "ghost", () => act(api().room_remove(item.id)));
+      return li;
+    }
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = selected.has(item.id);
+    box.setAttribute("aria-label", `Selecionar ${item.name}`);
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(item.id);
+      else selected.delete(item.id);
+      tools();
+    });
+    li.prepend(box);
+    if (p?.state === "done") addButton(li, "Mostrar", "ghost", () => api().room_reveal(item.id));
+    else if (!p || p.state === "error") addButton(li, "Baixar", "ghost", () => download([item.id]));
+    return li;
+  }
+
+  function personRow(person) {
+    const row = document.createElement("div");
+    const pending = person.state === "pending";
+    row.className = `dev-row${pending ? " pending" : ""}`;
+    const status = pending ? "Quer entrar na sala" : person.online ? "Na sala agora" : "Sem sinal";
+    row.innerHTML = `<span class="dev-dot${!pending && person.online ? " on" : ""}"></span><div class="dev-meta"><strong>${escapeHtml(person.name)}</strong><small>${escapeHtml(person.device)} · ${status}</small></div>`;
+    if (pending) {
+      addButton(row, "Recusar", "ghost", () => act(api().room_kick(person.id)));
+      addButton(row, "Deixar entrar", "acc-btn primary-soft", () => act(api().room_approve(person.id)));
+    } else {
+      addButton(row, "Tirar da sala", "ghost", () => act(api().room_kick(person.id)));
+    }
+    return row;
+  }
+
+  function tools() {
+    $("#room-get-selected").disabled = !selected.size;
+    $("#room-get-all").disabled = !state.theirs.length;
+  }
+
+  function showTab(name) {
+    tab = name;
+    document.querySelectorAll(".room-tabs button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.rtab === name);
+      b.setAttribute("aria-selected", String(b.dataset.rtab === name));
+    });
+    $("#room-pane-theirs").hidden = name !== "theirs";
+    $("#room-pane-mine").hidden = name !== "mine";
+  }
+
+  function render() {
+    const view = viewOf(state.phase);
+    document.querySelectorAll("[data-rview]").forEach((el) => (el.hidden = el.dataset.rview !== view));
+    const people = state.people || [];
+    const pending = people.filter((p) => p.state === "pending").length;
+    $("#room-btn").classList.toggle("on", view === "open" || view === "busy");
+    $("#room-badge").textContent = pending ? String(pending) : "";
+    if (!named && state.name) {
+      $("#room-name").value = state.name;
+      named = true;
+    }
+    if (view === "busy") {
+      $("#room-busy-title").textContent = BUSY_TITLES[state.phase];
+      $("#room-busy-text").textContent =
+        state.phase === "pending"
+          ? "Quem criou a sala precisa deixar você entrar pelo Salvaí."
+          : state.step || "Isso leva alguns segundos.";
+      const bar = $("#room-busy-bar");
+      bar.hidden = state.progress == null;
+      bar.firstElementChild.style.width = `${state.progress || 0}%`;
+      return;
+    }
+    if (view === "ended") {
+      $("#room-ended-title").textContent = state.phase === "error" ? "Não deu para abrir a sala" : "A sala fechou";
+      $("#room-ended-text").textContent = state.error || state.reason;
+      return;
+    }
+    if (view !== "open") return;
+    const host = state.role === "host";
+    $("#room-share").hidden = !host;
+    $("#room-close").textContent = host ? "Fechar sala" : "Sair da sala";
+    $("#room-code-text").textContent = state.code;
+    $("#room-url").textContent = state.url;
+    $("#room-with").innerHTML = host ? "" : `Você está na sala de <strong>${escapeHtml(state.host)}</strong>.`;
+    showTab(tab);
+    tools();
+    const key = JSON.stringify([state.role, people, state.theirs, state.mine]);
+    if (key === drawn) return;
+    drawn = key;
+    const list = $("#room-people");
+    list.replaceChildren(...people.map(personRow));
+    if (host && !people.length)
+      list.innerHTML = '<div class="dev-empty">Ninguém entrou ainda. Mande o link e o código pelo WhatsApp.</div>';
+    const ids = new Set(state.theirs.map((i) => i.id));
+    selected.forEach((id) => ids.has(id) || selected.delete(id));
+    $("#room-theirs").replaceChildren(...state.theirs.map((i) => itemRow(i, "theirs")));
+    if (!state.theirs.length)
+      $("#room-theirs").innerHTML = '<li class="room-empty">Nada para receber ainda. Os arquivos aparecem aqui.</li>';
+    $("#room-mine").replaceChildren(...state.mine.map((i) => itemRow(i, "mine")));
+    if (!state.mine.length)
+      $("#room-mine").innerHTML = '<li class="room-empty">Adicione arquivos ou pastas para mandar.</li>';
+    $("#room-theirs-count").textContent = state.theirs.length ? String(state.theirs.length) : "";
+    $("#room-mine-count").textContent = state.mine.length ? String(state.mine.length) : "";
+    tools();
+  }
+
+  async function act(promise) {
+    state = await promise;
+    const notice = state.notice || "";
+    $("#room-notice").textContent = state.phase === "open" ? notice : "";
+    $("#room-msg").textContent = state.phase === "open" ? "" : notice;
+    render();
+  }
+
+  async function poll() {
+    state = await api().room_status();
+    render();
+  }
+
+  function download(ids) {
+    if (state.theirs.some((i) => i.risky && ids.includes(i.id))) {
+      risky = ids;
+      $("#room-risky").hidden = false;
+      return;
+    }
+    act(api().room_download(ids));
+  }
+
+  function open() {
+    lastFocus = document.activeElement;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    poll();
+    clearInterval(timer);
+    timer = setInterval(poll, 1000);
+  }
+
+  function close() {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    clearInterval(timer);
+    lastFocus?.focus();
+  }
+
+  const leave = () => act(api().room_close());
+  $("#room-create").addEventListener("click", () => act(api().room_create($("#room-name").value.trim())));
+  $("#room-join-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    act(api().room_join($("#room-link").value.trim(), $("#room-code").value, $("#room-name").value.trim()));
+  });
+  $("#room-code").addEventListener("input", (e) => {
+    const raw = e.target.value
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 6);
+    e.target.value = raw.length > 3 ? `${raw.slice(0, 3)} ${raw.slice(3)}` : raw;
+  });
+  $("#room-cancel").addEventListener("click", leave);
+  $("#room-again").addEventListener("click", leave);
+  $("#room-close").addEventListener("click", leave);
+  $("#room-copy").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    await navigator.clipboard.writeText(`${state.url}\nCódigo: ${state.code}`);
+    btn.textContent = "Copiado!";
+    setTimeout(() => (btn.textContent = "Copiar"), 1500);
+  });
+  $("#room-whatsapp").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const result = await api().room_share_whatsapp();
+    if (!result.ok) return;
+    btn.lastChild.textContent = result.app === "desktop" ? " Abrindo…" : " Abrindo no navegador…";
+    setTimeout(() => (btn.lastChild.textContent = " WhatsApp"), 2500);
+  });
+  $("#room-add-files").addEventListener("click", () => act(api().room_add("files")));
+  $("#room-add-folder").addEventListener("click", () => act(api().room_add("folder")));
+  $("#room-get-selected").addEventListener("click", () => download([...selected]));
+  $("#room-get-all").addEventListener("click", () => download(state.theirs.map((i) => i.id)));
+  $("#room-risky-no").addEventListener("click", () => {
+    risky = null;
+    $("#room-risky").hidden = true;
+  });
+  $("#room-risky-yes").addEventListener("click", () => {
+    $("#room-risky").hidden = true;
+    act(api().room_download(risky));
+    risky = null;
+  });
+  document
+    .querySelectorAll(".room-tabs button")
+    .forEach((b) => b.addEventListener("click", () => showTab(b.dataset.rtab)));
+  $("#room-btn").addEventListener("click", open);
+  modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", close));
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && modal.classList.contains("open")) {
+        e.stopPropagation();
+        close();
+      }
+    },
+    true,
+  );
+
+  return { sync: poll };
+})();
+window.app.roomChanged = () => room.sync();
