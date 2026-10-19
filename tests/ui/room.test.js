@@ -571,3 +571,96 @@ describe("baixar", () => {
     expect(calls.some((c) => c.path.startsWith("/api/files"))).toBe(false);
   });
 });
+
+describe("miniaturas", () => {
+  test("mostra as de quem criou a sala e gera as suas", async () => {
+    const posted = [];
+    const media = HTMLMediaElement.prototype;
+    vi.spyOn(media, "src", "set").mockImplementation(function (url) {
+      queueMicrotask(() => this.dispatchEvent(new Event(url.includes("quebrado") ? "error" : "loadeddata")));
+    });
+    vi.spyOn(media, "currentTime", "set").mockImplementation(function () {
+      queueMicrotask(() => this.dispatchEvent(new Event("seeked")));
+    });
+    vi.spyOn(media, "duration", "get").mockReturnValueOnce(NaN).mockReturnValue(10);
+    vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(1920);
+    vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(1080);
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValueOnce("data:image/jpeg;base64,AA==")
+      .mockReturnValueOnce("data:image/jpeg;base64,BB==")
+      .mockReturnValueOnce("data:,");
+    vi.stubGlobal(
+      "Image",
+      class {
+        constructor() {
+          this.on = {};
+          this.naturalWidth = 600;
+          this.naturalHeight = 300;
+        }
+        addEventListener(type, fn) {
+          this.on[type] = fn;
+        }
+        set src(url) {
+          queueMicrotask(() => (url.includes("ruim") ? this.on.error : this.on.load)(new Event("x")));
+        }
+      },
+    );
+    const revoke = vi.fn();
+    vi.spyOn(URL, "createObjectURL").mockImplementation((f) => `blob:${f.name}`);
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(revoke);
+    const names = ["foto.png", "ruim.png", "clip.mp4", "quebrado.mp4", "nota.txt", "estranho.png"];
+    let mine = [];
+    await load({
+      "/api/me": approved,
+      "/api/state": () =>
+        state({
+          items: [
+            { id: "h1", kind: "file", name: "praia.jpg", size: 1, count: 1, thumb: true },
+            { id: "h2", kind: "file", name: "a.txt", size: 1, count: 1, thumb: false },
+          ],
+          mine,
+        }),
+      "/api/offer": (path, options) => {
+        const { items } = JSON.parse(options.body);
+        mine = items.map((item, i) => ({ id: `m${i}`, kind: "file", name: item.name, size: 1, count: 1 }));
+        return { ids: mine.map((m) => m.id) };
+      },
+      "/api/thumb": (path, options) => {
+        const body = JSON.parse(options.body);
+        posted.push(body);
+        return body.id === "m2" ? { status: 400, body: { error: "não" } } : { ok: true };
+      },
+    });
+    const theirs = $$("#theirs .item");
+    expect(theirs[0].querySelector(".item-icon img").getAttribute("src")).toBe("/api/thumb?item=h1");
+    expect(theirs[1].querySelector(".item-icon img")).toBeNull();
+    const type = (name) => (name.endsWith(".txt") ? "text/plain" : name.endsWith(".mp4") ? "video/mp4" : "image/png");
+    pick(
+      "#pick-files",
+      names.map((name) => new File(["x"], name, { type: type(name) })),
+    );
+    for (let i = 0; i < 20; i++) await tick(0);
+    expect(posted).toEqual([
+      { id: "m0", thumb: "data:image/jpeg;base64,AA==" },
+      { id: "m2", thumb: "data:image/jpeg;base64,BB==" },
+    ]);
+    expect(drawImage.mock.calls.map((c) => c.slice(1))).toEqual([
+      [0, 0, 240, 120],
+      [0, 0, 240, 135],
+      [0, 0, 240, 120],
+    ]);
+    expect(revoke).toHaveBeenCalledTimes(5);
+    const rows = $$("#mine .item");
+    expect(rows.map((r) => r.querySelector(".item-icon img")?.getAttribute("src") ?? "")).toEqual([
+      "data:image/jpeg;base64,AA==",
+      "",
+      "data:image/jpeg;base64,BB==",
+      "",
+      "",
+      "",
+    ]);
+    vi.restoreAllMocks();
+  });
+});

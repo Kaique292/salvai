@@ -156,7 +156,9 @@ def test_scan_local(tmp_path, monkeypatch):
 def test_items_and_offers():
     item = app.make_item("host", "folder", "Fo:to", [{"rel": "a.exe", "size": 2}, {"rel": "b", "size": 3}])
     assert item["name"] == "Fo_to" and item["size"] == 5 and item["count"] == 2 and item["risky"]
-    assert app.public_item(item) == {k: item[k] for k in ("id", "kind", "name", "size", "count", "risky")}
+    assert app.public_item(item) == dict(
+        {k: item[k] for k in ("id", "kind", "name", "size", "count", "risky")}, thumb=False
+    )
     assert app.item_signature(item) == ("folder", "Fo_to", (("a.exe", 2), ("b", 3)))
     parsed = app.parse_offer({"kind": "folder", "files": [{"rel": "x/../y", "size": 1}]})
     assert parsed == {"kind": "folder", "name": "x/y", "files": [{"rel": "x/y", "size": 1}]}
@@ -864,7 +866,7 @@ def test_client_add_paths_batches(client, tmp_path, monkeypatch):
         if path == "/api/offer":
             posted.append(body)
             return {"ids": [f"id{len(posted)}"]}
-        return {"host": "Kaique", "requests": [{"id": "r", "item": "id1"}, {"id": "s", "item": "x"}]}
+        return {"host": "Kaique", "items": [], "requests": [{"id": "r", "item": "id1"}, {"id": "s", "item": "x"}]}
 
     monkeypatch.setattr(client, "request", fake_request)
     client.add_paths([str(f) for f in files])
@@ -1101,3 +1103,126 @@ def test_api_room_end_to_end(api, tmp_path, monkeypatch):
     api._window = FakeWindow()
     api.room_close()
     assert room.phase == "idle"
+
+
+def picture(path: Path, size=(600, 400)) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    app.Image.new("RGB", size, "red").save(path)
+    return path
+
+
+def png_bytes() -> bytes:
+    out = io.BytesIO()
+    app.Image.new("RGB", (32, 18), "blue").save(out, "PNG")
+    return out.getvalue()
+
+
+def test_thumb_helpers(tmp_path, monkeypatch):
+    assert app.media_kind("A.JPG") == "image" and app.media_kind("b.mkv") == "video" and app.media_kind("c.txt") == ""
+    photo = picture(tmp_path / "foto.png")
+    thumb = app.make_thumb([{"rel": "x/leia.txt", "path": "nada"}, {"rel": "x/foto.png", "path": str(photo)}])
+    assert app.clean_thumb(thumb) == thumb
+    with app.Image.open(io.BytesIO(app.base64.b64decode(thumb.split(",")[1]))) as image:
+        assert image.size == (240, 160) and image.format == "JPEG"
+    assert app.make_thumb([{"rel": "a.txt", "path": "a.txt"}]) == ""
+    assert app.make_thumb([{"rel": "ruim.png", "path": str(write(tmp_path / "ruim.png", b"x"))}]) == ""
+    runs = []
+
+    def fake_run(args, **kwargs):
+        runs.append(args[args.index("-ss") + 1])
+        return types.SimpleNamespace(stdout=b"" if len(runs) == 1 else png_bytes())
+
+    monkeypatch.setattr(app, "ffmpeg_dir", lambda: "bin")
+    monkeypatch.setattr(app.subprocess, "run", fake_run)
+    assert app.make_thumb([{"rel": "v.mp4", "path": "v.mp4"}]).startswith("data:image/jpeg;base64,")
+    assert runs == ["1", "0"]
+    monkeypatch.setattr(app.subprocess, "run", lambda args, **kw: types.SimpleNamespace(stdout=b""))
+    assert app.video_frame(Path("v.mp4")) == b"" and app.make_thumb([{"rel": "v.mp4", "path": "v.mp4"}]) == ""
+    for bad in (
+        None,
+        "data:image/png;base64,AA==",
+        "data:image/jpeg;base64,<x>",
+        "data:image/jpeg;base64," + "A" * 70000,
+    ):
+        with pytest.raises(ValueError, match="Miniatura"):
+            app.clean_thumb(bad)
+
+
+def test_room_thumbs(host, client, tmp_path):
+    photo = picture(tmp_path / "host" / "foto.jpg")
+    host.add_paths([str(photo), str(write(tmp_path / "host" / "a.txt", b"a"))])
+    assert wait_until(lambda: all("thumb" in i for i in host.items.values()))
+    [shown, plain] = host.status()["mine"]
+    assert shown["thumb"].startswith("data:image/jpeg") and plain["thumb"] == ""
+    sid, person = join(host)
+    status, headers, data = call(host, "GET", f"/api/thumb?item={shown['id']}", sid=sid)
+    assert status == 200 and headers["Content-Type"] == "image/jpeg" and data[:2] == b"\xff\xd8"
+    status, _, data = call(host, "GET", f"/api/thumb?item={plain['id']}", sid=sid)
+    assert status == 400 and "miniatura" in json_body(data)["error"]
+    state = json_body(call(host, "GET", "/api/state", sid=sid)[2])
+    assert {i["name"]: i["thumb"] for i in state["items"]} == {"foto.jpg": True, "a.txt": False}
+    [mine] = offer(host, sid, [{"kind": "file", "name": "v.jpg", "files": [{"rel": "v.jpg", "size": 1}]}])
+    status, _, _ = call(host, "POST", "/api/thumb", {"id": mine, "thumb": shown["thumb"]}, sid)
+    assert status == 200 and host.status()["theirs"][0]["thumb"] == shown["thumb"]
+    status, _, data = call(host, "POST", "/api/thumb", {"id": shown["id"], "thumb": shown["thumb"]}, sid)
+    assert status == 400 and "Não achei" in json_body(data)["error"]
+    status, _, data = call(host, "POST", "/api/thumb", {"id": mine, "thumb": "x"}, sid)
+    assert status == 400 and "Miniatura" in json_body(data)["error"]
+    host.kick(person)
+    client.join(client.base, "abc123", "Bia")
+    assert wait_until(lambda: client.phase == "pending")
+    host.approve(next(p["id"] for p in host.status()["people"] if p["state"] == "pending"))
+    assert wait_until(lambda: client.phase == "open" and len(client.thumbs) == 1)
+    theirs = {i["name"]: i["thumb"] for i in client.status()["theirs"]}
+    assert theirs == {"foto.jpg": shown["thumb"], "a.txt": ""}
+    client.thumbs.clear()
+    host.items[plain["id"]]["thumb"] = shown["thumb"]
+    host.items[shown["id"]]["thumb"] = ""
+    assert client._thumb(shown["id"]) == ""
+    client.add_paths([str(picture(tmp_path / "guest" / "eu.png")), str(write(tmp_path / "guest" / "b.txt", b"b"))])
+    assert wait_until(lambda: any(i.get("thumb") for i in host.items.values() if i["owner"] != "host"))
+    mine = {i["name"]: i["thumb"] for i in client.status()["mine"]}
+    assert mine["eu.png"].startswith("data:image/jpeg") and mine["b.txt"] == ""
+
+
+def test_client_send_thumbs_survives_errors(client, monkeypatch):
+    monkeypatch.setattr(app, "make_thumb", lambda files: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr(client, "request", lambda *a, **k: (_ for _ in ()).throw(app.RoomError(400, "não")))
+    client._send_thumbs([("i", [])])
+    assert client.thumbs == {"i": "data:image/jpeg;base64,AA=="} and client.api.changes == 1
+
+
+def test_local_files(tmp_path, monkeypatch):
+    files = app.LocalFiles()
+    video = write(tmp_path / "vídeo 1.mp4", b"0123456789")
+    url = files.share(video)
+    assert url.endswith("/v%C3%ADdeo%201.mp4") and files.share(video) != url
+    port = files.server.server_address[1]
+    path = url.split(str(port), 1)[1]
+    status, headers, data = http_request(port, "GET", path, headers={"Range": "bytes=2-4"})
+    assert status == 206 and data == b"234" and headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+    status, headers, data = http_request(port, "HEAD", path)
+    assert status == 200 and data == b"" and headers["Content-Length"] == "10"
+    assert http_request(port, "GET", "/nada/x")[0] == 404
+    assert http_request(port, "GET", path, headers={"Host": "evil.com"})[0] == 404
+    monkeypatch.setattr(app, "send_file", lambda *a: (_ for _ in ()).throw(ConnectionResetError()))
+    with pytest.raises(http.client.RemoteDisconnected):
+        http_request(port, "GET", path)
+    files.server.shutdown()
+
+
+def test_api_room_preview(api, tmp_path, monkeypatch):
+    photo = picture(tmp_path / "foto.png")
+    clip = write(tmp_path / "clip.mp4", b"v")
+    roots = {"p": photo, "v": clip, "t": write(tmp_path / "a.txt", b"t"), "d": tmp_path, "g": tmp_path / "sumiu"}
+    assert api.room_preview("p") == {}
+    api._room = types.SimpleNamespace(item_root=roots.get, close=lambda reason="": None)
+    monkeypatch.setattr(api._viewer, "share", lambda path: f"http://127.0.0.1:1/{path.name}")
+    assert api.room_preview("p") == {"kind": "image", "name": "foto.png", "url": "http://127.0.0.1:1/foto.png"}
+    assert api.room_preview("v")["kind"] == "video"
+    assert api.room_preview("t") == api.room_preview("d") == api.room_preview("g") == api.room_preview("x") == {}
+    opened = []
+    monkeypatch.setattr(app.os, "startfile", opened.append, raising=False)
+    api.room_open("v")
+    api.room_open("g")
+    assert opened == [clip]

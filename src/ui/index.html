@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: http://127.0.0.1:*; media-src http://127.0.0.1:*; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>Salvaí</title>
     <link rel="stylesheet" href="style.css" />
@@ -230,7 +230,7 @@
 
     <div class="modal" id="storage-modal" aria-hidden="true">
       <div class="modal-backdrop" data-close></div>
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="storage-title">
+      <div class="modal-panel storage-panel" role="dialog" aria-modal="true" aria-labelledby="storage-title">
         <div class="modal-head">
           <div class="modal-icon">
             <svg viewBox="0 0 24 24">
@@ -581,6 +581,21 @@
           </svg>
           Só entra quem tem o código e é aprovado. Só aparece o que for adicionado à sala, nada mais do seu PC.
         </p>
+      </div>
+      <div class="room-viewer" id="room-viewer" hidden>
+        <div class="room-viewer-backdrop" data-vclose></div>
+        <figure class="room-viewer-body">
+          <img id="room-viewer-img" alt="" hidden />
+          <video id="room-viewer-video" controls autoplay hidden></video>
+          <p class="room-viewer-fail" id="room-viewer-fail" hidden>
+            Esse vídeo não toca aqui dentro. Abra no player do computador.
+          </p>
+          <figcaption>
+            <span id="room-viewer-name"></span>
+            <button class="ghost" id="room-viewer-open">Abrir no player</button>
+            <button class="ghost" data-vclose>Fechar</button>
+          </figcaption>
+        </figure>
       </div>
     </div>
 

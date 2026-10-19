@@ -583,7 +583,13 @@ def test_update_app_paths(api, monkeypatch):
 def test_restart_skip_and_release(api, monkeypatch, instant_timer):
     launched, envs = [], []
     monkeypatch.setattr(app.subprocess, "Popen", lambda args, **k: (launched.append(args), envs.append(k["env"])))
+    api._tray.icon = object()
+    api._room = types.SimpleNamespace(active=True, close=lambda reason="": None)
+    stopped = []
+    monkeypatch.setattr(api._phone, "stop", lambda: stopped.append("phone"))
+    monkeypatch.setattr(api._tray, "stop", lambda: stopped.append("tray"))
     api.restart_app()
+    assert stopped == ["phone", "tray"] and api._room is None and api._on_closing() is True
     monkeypatch.setattr(app.sys, "frozen", True, raising=False)
     api.restart_app()
     assert launched[0][-1].endswith("app.py") and launched[1] == [app.sys.executable]

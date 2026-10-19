@@ -1401,6 +1401,29 @@ kbd {
   flex-direction: column;
   gap: 6px;
 }
+.storage-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.storage-panel > * {
+  flex: none;
+}
+.storage-panel > .st-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -10px;
+  padding-right: 10px;
+  overscroll-behavior: contain;
+}
+.storage-panel > .st-list::-webkit-scrollbar {
+  width: 8px;
+}
+.storage-panel > .st-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
 .st-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -2597,18 +2620,10 @@ kbd {
   animation: spin360 0.8s linear infinite;
 }
 .room-bar,
-.room-item-bar {
-  width: 100%;
-  height: 4px;
-  border-radius: 4px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
 .room-bar {
   max-width: 280px;
 }
-.room-bar i,
-.room-item-bar i {
+.room-bar i {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -2713,6 +2728,7 @@ kbd {
   border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--input);
+  animation: pop 0.35s var(--ease);
 }
 .room-item input[type="checkbox"] {
   width: 16px;
@@ -2720,15 +2736,164 @@ kbd {
   flex: none;
   accent-color: var(--accent);
 }
-.room-item-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+.room-thumb {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   flex: none;
   color: var(--muted);
-  background: var(--surface-2);
+  background: var(--thumb-bg);
+}
+.room-thumb > svg:first-child {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.room-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.room-item.has-thumb .room-thumb img {
+  opacity: 1;
+}
+.room-item.has-thumb .room-thumb > svg:first-child {
+  visibility: hidden;
+}
+.room-item.can-view .room-thumb {
+  cursor: zoom-in;
+}
+.room-ring {
+  position: absolute;
+  inset: -5px;
+  width: 50px;
+  height: 50px;
+  transform: rotate(-90deg);
+  fill: none;
+  stroke-width: 3;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  --c: var(--accent);
+}
+.room-ring .track {
+  stroke: var(--surface-2);
+}
+.room-ring .bar {
+  stroke: var(--c);
+  stroke-linecap: round;
+  stroke-dasharray: 131.95;
+  stroke-dashoffset: 131.95;
+  transition:
+    stroke-dashoffset 0.35s var(--ease),
+    stroke 0.3s;
+}
+.room-item.sending .room-ring,
+.room-item.waiting .room-ring {
+  opacity: 1;
+}
+.room-item.waiting .room-ring {
+  animation: spin 1s linear infinite;
+}
+.room-item.waiting .room-ring .bar {
+  stroke-dashoffset: 100 !important;
+}
+.room-item.done .room-ring {
+  --c: var(--green);
+  animation: ring-done 1.2s ease forwards;
+}
+@keyframes ring-done {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.room-item.sending small {
+  font-variant-numeric: tabular-nums;
+}
+.room-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.room-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  animation: viewer-in 0.2s ease;
+}
+.room-viewer[hidden] {
+  display: none;
+}
+.room-viewer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.82);
+}
+.room-viewer-body {
+  position: relative;
+  margin: 0;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.room-viewer-body img,
+.room-viewer-body video {
+  max-width: min(1100px, 100%);
+  max-height: calc(100vh - 120px);
+  border-radius: 12px;
+  background: #000;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+}
+.room-viewer-fail {
+  margin: 0;
+  padding: 28px 32px;
+  border-radius: 12px;
+  color: #ddd;
+  background: rgb(255 255 255 / 0.06);
+}
+.room-viewer-body figcaption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  color: #eee;
+  font-size: 13px;
+}
+.room-viewer-body figcaption span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.room-viewer-body figcaption .ghost {
+  color: #eee;
+}
+@keyframes viewer-in {
+  from {
+    opacity: 0;
+  }
 }
 .room-item-meta {
   flex: 1;
