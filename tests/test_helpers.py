@@ -343,6 +343,7 @@ def test_quiet_logger_accepts_everything():
         ("Video unavailable", "https://www.youtube.com/watch?v=jNQXAC9IVRw", "unavailable"),
         ("not available in your country (geo restricted)", "https://exemplo.org", "geo"),
         ("Unexpected response; please report this issue", "https://www.tiktok.com/a", "blocked"),
+        ("unable to download video data: HTTP Error 403: Forbidden", "https://www.youtube.com/watch?v=x", "blocked"),
         ("algo estranho", "https://exemplo.org", "other"),
     ],
 )

@@ -496,6 +496,11 @@ def friendly_error(e, url: str) -> tuple[str, str]:
         return "novideo", "Não encontrei vídeo nesse link — pode ser só foto ou texto."
     if any(m in low for m in ("unavailable", "removed", "404", "does not exist", "not found", "deleted")):
         return "unavailable", "Conteúdo indisponível: foi removido ou o link está errado."
+    if "403" in low or "forbidden" in low:
+        return "blocked", (
+            f"O {name} recusou o download desse vídeo agora. Tente de novo em alguns minutos; "
+            "se usar VPN, desligue e tente outra vez."
+        )
     if "geo" in low or "your country" in low:
         return "geo", "Esse conteúdo está bloqueado na sua região."
     if "please report this issue" in full or "unexpected response" in full or "unable to extract" in full:
@@ -4251,7 +4256,15 @@ class Api:
             opts["postprocessor_hooks"] = [pp_hook]
             with make_ydl(opts) as ydl:
                 if youtube:
-                    result = ydl.process_ie_result(info, download=True)
+                    try:
+                        result = ydl.process_ie_result(info, download=True)
+                    except Exception as e:
+                        # Links do googlevideo expiram e ficam presos ao IP de quem buscou: renova e tenta mais uma vez
+                        if item["_cancel"] or "403" not in str(e):
+                            raise
+                        item["_info"] = None
+                        info = copy.deepcopy(self._ensure_info(item))
+                        result = ydl.process_ie_result(info, download=True)
                 else:
                     result = ydl.extract_info(item["url"], download=True)
                     item["title"] = item["title"] or result.get("title")
