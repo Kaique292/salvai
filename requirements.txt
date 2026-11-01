@@ -1,6 +1,6 @@
 yt-dlp[default,curl-cffi]==2026.8.19
 pywebview==6.2.1
-imageio-ffmpeg==0.6.0
+imageio-ffmpeg==0.7.0
 mcp==2.3.0
 pillow==12.3.0
 pystray==0.19.5
