@@ -1,4 +1,4 @@
-yt-dlp[default,curl-cffi]==2026.8.19
+yt-dlp[default,curl-cffi]==2026.10.26
 pywebview==6.2.1
 imageio-ffmpeg==0.6.0
 mcp==2.3.0
